@@ -20,7 +20,7 @@ on:
     - cron: '30 22 * * 1'      # 00:30 PL (wtorek)
     - cron: '0 0 * * 2'        # 02:00 PL (wtorek)
 
-    # --- WYJĄTEK: Niedziela 14:10 PL (12:10 UTC) ---
+    # --- WYJĄTEK: Niedziela 15:00 PL (12:00 UTC) ---
     - cron: '10 13 * * 0'
 
   workflow_dispatch:
