@@ -13,6 +13,8 @@ on:
     - cron: '30 22 * * 5,6,0,1'  # 00:30 PL
     - cron: '0 0 * * 6,0,1,2'    # 02:00 PL (ostatni blok weekendu kończący się w poniedziałek w nocy)
 
+    # NOWOŚĆ: Niedziela, godzina 14:10 czasu PL -> 12:10 UTC
+    - cron: '10 12 * * 0'
   workflow_dispatch: # Pozwala na ręczne uruchomienie testowe w dowolnym momencie
 
 jobs:
