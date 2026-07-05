@@ -32,9 +32,10 @@ jobs:
 
       - name: Record Radio Stream
         run: |
-          # Pobranie aktualnej godziny i dnia tygodnia w strefie PL
-          CURRENT_HOUR=$(TZ="Europe/Warsaw" date +"%H:%M")
-          CURRENT_DAY=$(TZ="Europe/Warsaw" date +"%u") # 7 to niedziela
+          # Pobranie aktualnego dnia, godziny i minuty w strefie PL
+          CURRENT_DAY=$(TZ="Europe/Warsaw" date +"%u")  # 7 to niedziela
+          CURRENT_HOUR=$(TZ="Europe/Warsaw" date +"%H") # Godzina w formacie 24h (np. 14)
+          CURRENT_MIN=$(TZ="Europe/Warsaw" date +"%M")  # Minuta (np. 12)
           
           # Generowanie nazwy pliku
           TIMESTAMP=$(TZ="Europe/Warsaw" date +"%Y-%m-%d_%H-%M")
@@ -46,9 +47,11 @@ jobs:
           # Domyślny czas nagrywania: 5400 sekund (1.5 godziny)
           RECORD_DURATION=5400
           
-          # Jeśli jest niedziela (7) i godzina rozpoczęcia to 14:10, zmieniamy czas na 10 minut (600 sekund)
-          if [ "$CURRENT_DAY" = "7" ] && [ "$CURRENT_HOUR" = "14:10" ]; then
-            echo "Wykryto okienko niedzielne. Ustawiam nagrywanie na 10 minut."
+          # Tolerancyjne okienko dla niedzieli 14:10:
+          # Sprawdzamy czy jest niedziela (7), godzina 14 oraz czy minuta mieści się między 10 a 25.
+          # Zapobiega to błędowi, gdy GitHub Actions uruchomi skrypt z kilkuminutowym poślizgiem.
+          if [ "$CURRENT_DAY" = "7" ] && [ "$CURRENT_HOUR" = "14" ] && [ "$CURRENT_MIN" -ge 10 ] && [ "$CURRENT_MIN" -le 25 ]; then
+            echo "Wykryto niedzielne okienko (start z minuty: $CURRENT_MIN). Ustawiam nagrywanie na 10 minut."
             RECORD_DURATION=600
           fi
           
