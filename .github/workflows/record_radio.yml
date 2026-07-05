@@ -12,15 +12,15 @@ on:
     - cron: '0 23 * * 5,6,0'   # 01:00 PL (w nocy na kolejny dzień)
 
     # --- BLOK: PONIEDZIAŁEK (Start od 17:00 PL / 15:00 UTC) ---
-    - cron: '0 15 * * 1'   # 17:00 PL
-    - cron: '30 16 * * 1'  # 18:30 PL
-    - cron: '0 18 * * 1'   # 20:00 PL
-    - cron: '30 19 * * 1'  # 21:30 PL
-    - cron: '0 21 * * 1'   # 23:00 PL
-    - cron: '30 22 * * 1'  # 00:30 PL (wtorek rano)
-    - cron: '0 0 * * 2'    # 02:00 PL (wtorek rano)
-    
-    # --- WYJĄTEK: Niedziela, godzina 14:10 czasu PL -> 12:10 UTC ---
+    - cron: '0 15 * * 1'       # 17:00 PL
+    - cron: '30 16 * * 1'      # 18:30 PL
+    - cron: '0 18 * * 1'       # 20:00 PL
+    - cron: '30 19 * * 1'      # 21:30 PL
+    - cron: '0 21 * * 1'       # 23:00 PL
+    - cron: '30 22 * * 1'      # 00:30 PL (wtorek)
+    - cron: '0 0 * * 2'        # 02:00 PL (wtorek)
+
+    # --- WYJĄTEK: Niedziela 14:10 PL (12:10 UTC) ---
     - cron: '10 12 * * 0'
 
   workflow_dispatch:
@@ -28,49 +28,93 @@ on:
 jobs:
   record_and_upload:
     runs-on: ubuntu-latest
+    timeout-minutes: 120
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
       - name: Install dependencies (ffmpeg & mega-cmd)
         run: |
+          set -euo pipefail
+
           sudo apt-get update
           sudo apt-get install -y ffmpeg
-          sudo wget -O /var/tmp/megacmd.deb https://mega.nz/linux/repo/xUbuntu_22.04/amd64/megacmd-xUbuntu_22.04_amd64.deb
+
+          sudo wget -O /var/tmp/megacmd.deb \
+            https://mega.nz/linux/repo/xUbuntu_22.04/amd64/megacmd-xUbuntu_22.04_amd64.deb
+
           sudo apt-get install -y /var/tmp/megacmd.deb
 
       - name: Record Radio Stream
         run: |
-          # Pobranie aktualnego dnia i godziny w strefie PL
-          CURRENT_DAY=$(TZ="Europe/Warsaw" date +"%u")  # 7 to niedziela
-          CURRENT_HOUR=$(TZ="Europe/Warsaw" date +"%H") # Godzina w formacie 24h (np. 14)
-          
-          # Generowanie nazwy pliku
+          set -euo pipefail
+
+          # Aktualny dzień i godzina w Polsce
+          CURRENT_DAY=$(TZ="Europe/Warsaw" date +"%u")
+          CURRENT_HOUR=$(TZ="Europe/Warsaw" date +"%H")
+
+          # Nazwa pliku
           TIMESTAMP=$(TZ="Europe/Warsaw" date +"%Y-%m-%d_%H-%M")
           FILENAME="Radio_Park_${TIMESTAMP}.mp3"
-          echo "FILENAME=$FILENAME" >> $GITHUB_ENV
-          
+
+          echo "FILENAME=$FILENAME" >> "$GITHUB_ENV"
+
           STREAM_URL="https://sluchaj2.radiopark.biz.pl:8443/stream"
-          
-          # Domyślny czas nagrywania: 5400 sekund (1.5 godziny)
+
+          # Domyślnie 90 minut
           RECORD_DURATION=5400
-          
-          # Kuloodporne okienko: Jeśli jest niedziela (7) i wybije godzina 14,
-          # niezależnie od minuty startu wymuszamy 10 minut nagrania.
+
+          # Niedziela około godziny 14:00 - nagranie 5 minut
           if [ "$CURRENT_DAY" = "7" ] && [ "$CURRENT_HOUR" = "14" ]; then
-            echo "Wykryto audycję niedzielną w oknie godziny 14:00. Ustawiam nagrywanie na 10 minut."
+            echo "Wykryto audycję niedzielną. Nagrywanie przez 5 minut."
             RECORD_DURATION=300
           fi
-          
-          echo "Rozpoczynam nagrywanie ($RECORD_DURATION sekund): $FILENAME"
-          ffmpeg -i "$STREAM_URL" -t $RECORD_DURATION -c:a libmp3lame -b:a 128k "$FILENAME"
+
+          echo "Rozpoczynam nagrywanie (${RECORD_DURATION} s): $FILENAME"
+
+          ffmpeg \
+            -y \
+            -loglevel warning \
+            -reconnect 1 \
+            -reconnect_streamed 1 \
+            -reconnect_delay_max 5 \
+            -i "$STREAM_URL" \
+            -t "$RECORD_DURATION" \
+            -c:a libmp3lame \
+            -b:a 128k \
+            "$FILENAME"
+
+          echo "Nagrywanie zakończone."
 
       - name: Upload to MEGA.io
         env:
           MEGA_EMAIL: ${{ secrets.MEGA_EMAIL }}
           MEGA_PASSWORD: ${{ secrets.MEGA_PASSWORD }}
         run: |
-          mega-login "$MEGA_EMAIL" "$MEGA_PASSWORD"
+          set -euo pipefail
+
+          if ! mega-login "$MEGA_EMAIL" "$MEGA_PASSWORD"; then
+            echo "Błąd logowania do MEGA."
+            exit 1
+          fi
+
           mega-mkdir /Radio_Nagrania || true
+
+          if [ ! -f "$FILENAME" ]; then
+            echo "Plik nie został nagrany."
+            exit 1
+          fi
+
+          if [ ! -s "$FILENAME" ]; then
+            echo "Nagranie jest puste."
+            exit 1
+          fi
+
+          echo "Wysyłam plik do MEGA..."
+
           mega-put "$FILENAME" /Radio_Nagrania/
+
+          echo "Plik został wysłany."
+
           mega-logout
