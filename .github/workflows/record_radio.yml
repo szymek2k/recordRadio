@@ -1,0 +1,60 @@
+name: Record Radio Park FM
+
+on:
+  schedule:
+    # Harmonogram uwzględnia przesunięcie czasu z polskiego (CET/CEST) na UTC.
+    # Aby nagrać blok 17:00 - 02:00 czasu polskiego, w UTC startujemy od 15:00 do 00:00.
+    # Dni: Piątek (5), Sobota (6), Niedziela (0), Poniedziałek (1) oraz wtorkowa noc (2).
+    - cron: '0 15 * * 5,6,0,1'   # 17:00 PL
+    - cron: '30 16 * * 5,6,0,1'  # 18:30 PL
+    - cron: '0 18 * * 5,6,0,1'   # 20:00 PL
+    - cron: '30 19 * * 5,6,0,1'  # 21:30 PL
+    - cron: '0 21 * * 5,6,0,1'   # 23:00 PL
+    - cron: '30 22 * * 5,6,0,1'  # 00:30 PL
+    - cron: '0 0 * * 6,0,1,2'    # 02:00 PL (ostatni blok weekendu kończący się w poniedziałek w nocy)
+
+  workflow_dispatch: # Pozwala na ręczne uruchomienie testowe w dowolnym momencie
+
+jobs:
+  record_and_upload:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install dependencies (ffmpeg & mega-cmd)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+          # Pobranie i instalacja oficjalnego klienta tekstowego MEGA
+          sudo wget -O /var/tmp/megacmd.deb https://mega.nz/linux/repo/xUbuntu_22.04/amd64/megacmd-xUbuntu_22.04_amd64.deb
+          sudo apt-get install -y /var/tmp/megacmd.deb
+
+      - name: Record Radio Stream (1.5 hours)
+        run: |
+          # Generowanie czytelnej nazwy pliku z polską strefą czasową
+          TIMESTAMP=$(TZ="Europe/Warsaw" date +"%Y-%m-%d_%H-%M")
+          FILENAME="Radio_Park_${TIMESTAMP}.mp3"
+          echo "FILENAME=$FILENAME" >> $GITHUB_ENV
+          
+          STREAM_URL="https://sluchaj2.radiopark.biz.pl:8443/stream"
+          
+          echo "Rozpoczynam nagrywanie: $FILENAME"
+          # -t 5400 to dokładnie 90 minut (1.5 godziny)
+          # Używamy libmp3lame o stałym bitrate 128k dla optymalnego rozmiaru i kompatybilności
+          ffmpeg -i "$STREAM_URL" -t 5400 -c:a libmp3lame -b:a 128k "$FILENAME"
+
+      - name: Upload to MEGA.io
+        env:
+          MEGA_EMAIL: ${{ secrets.MEGA_EMAIL }}
+          MEGA_PASSWORD: ${{ secrets.MEGA_PASSWORD }}
+        run: |
+          # Logowanie do chmury MEGA za pomocą Twoich sekretów
+          mega-login "$MEGA_EMAIL" "$MEGA_PASSWORD"
+          
+          # Utworzenie dedykowanego katalogu (jeśli nie istnieje) i wysłanie pliku
+          mega-mkdir /Radio_Nagrania || true
+          mega-put "$FILENAME" /Radio_Nagrania/
+          
+          # Bezpieczne wylogowanie sesji z serwera GitHub
+          mega-logout
