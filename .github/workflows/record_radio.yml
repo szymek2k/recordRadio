@@ -2,16 +2,25 @@ name: Record Radio Park FM
 
 on:
   schedule:
-    # Główny blok: pt, sob, nd, pon od 17:00 PL (15:00 UTC)
-    - cron: '0 15 * * 5,6,0,1'   # 17:00 PL
-    - cron: '30 16 * * 5,6,0,1'  # 18:30 PL
-    - cron: '0 18 * * 5,6,0,1'   # 20:00 PL
-    - cron: '30 19 * * 5,6,0,1'  # 21:30 PL
-    - cron: '0 21 * * 5,6,0,1'   # 23:00 PL
-    - cron: '30 22 * * 5,6,0,1'  # 00:30 PL
-    - cron: '0 0 * * 6,0,1,2'    # 02:00 PL
+    # --- BLOK: PIĄTEK, SOBOTA, NIEDZIELA (Start od 16:00 PL / 14:00 UTC) ---
+    - cron: '0 14 * * 5,6,0'   # 16:00 PL
+    - cron: '30 15 * * 5,6,0'  # 17:30 PL
+    - cron: '0 17 * * 5,6,0'   # 19:00 PL
+    - cron: '30 18 * * 5,6,0'  # 20:30 PL
+    - cron: '0 20 * * 5,6,0'   # 22:00 PL
+    - cron: '30 21 * * 5,6,0'  # 23:30 PL
+    - cron: '0 23 * * 5,6,0'   # 01:00 PL (w nocy na kolejny dzień)
+
+    # --- BLOK: PONIEDZIAŁEK (Start od 17:00 PL / 15:00 UTC) ---
+    - cron: '0 15 * * 1'   # 17:00 PL
+    - cron: '30 16 * * 1'  # 18:30 PL
+    - cron: '0 18 * * 1'   # 20:00 PL
+    - cron: '30 19 * * 1'  # 21:30 PL
+    - cron: '0 21 * * 1'   # 23:00 PL
+    - cron: '30 22 * * 1'  # 00:30 PL (wtorek rano)
+    - cron: '0 0 * * 2'    # 02:00 PL (wtorek rano)
     
-    # NOWOŚĆ: Niedziela, godzina 14:10 czasu PL -> 12:10 UTC
+    # --- WYJĄTEK: Niedziela, godzina 14:10 czasu PL -> 12:10 UTC ---
     - cron: '10 12 * * 0'
 
   workflow_dispatch:
@@ -32,10 +41,9 @@ jobs:
 
       - name: Record Radio Stream
         run: |
-          # Pobranie aktualnego dnia, godziny i minuty w strefie PL
+          # Pobranie aktualnego dnia i godziny w strefie PL
           CURRENT_DAY=$(TZ="Europe/Warsaw" date +"%u")  # 7 to niedziela
           CURRENT_HOUR=$(TZ="Europe/Warsaw" date +"%H") # Godzina w formacie 24h (np. 14)
-          CURRENT_MIN=$(TZ="Europe/Warsaw" date +"%M")  # Minuta (np. 12)
           
           # Generowanie nazwy pliku
           TIMESTAMP=$(TZ="Europe/Warsaw" date +"%Y-%m-%d_%H-%M")
@@ -47,12 +55,11 @@ jobs:
           # Domyślny czas nagrywania: 5400 sekund (1.5 godziny)
           RECORD_DURATION=5400
           
-          # Tolerancyjne okienko dla niedzieli 14:10:
-          # Sprawdzamy czy jest niedziela (7), godzina 14 oraz czy minuta mieści się między 10 a 25.
-          # Zapobiega to błędowi, gdy GitHub Actions uruchomi skrypt z kilkuminutowym poślizgiem.
-          if [ "$CURRENT_DAY" = "7" ] && [ "$CURRENT_HOUR" = "14" ] && [ "$CURRENT_MIN" -ge 10 ] && [ "$CURRENT_MIN" -le 25 ]; then
-            echo "Wykryto niedzielne okienko (start z minuty: $CURRENT_MIN). Ustawiam nagrywanie na 10 minut."
-            RECORD_DURATION=600
+          # Kuloodporne okienko: Jeśli jest niedziela (7) i wybije godzina 14,
+          # niezależnie od minuty startu wymuszamy 10 minut nagrania.
+          if [ "$CURRENT_DAY" = "7" ] && [ "$CURRENT_HOUR" = "14" ]; then
+            echo "Wykryto audycję niedzielną w oknie godziny 14:00. Ustawiam nagrywanie na 10 minut."
+            RECORD_DURATION=300
           fi
           
           echo "Rozpoczynam nagrywanie ($RECORD_DURATION sekund): $FILENAME"
