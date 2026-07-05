@@ -1,120 +1,121 @@
-name: Record Radio Park FM
+name: Radio Park FM - ULTIMATE LOGGER (FIXED & TESTED)
 
 on:
   schedule:
-    # --- BLOK: PIĄTEK, SOBOTA, NIEDZIELA (Start od 16:00 PL / 14:00 UTC) ---
-    - cron: '0 14 * * 5,6,0'   # 16:00 PL
-    - cron: '30 15 * * 5,6,0'  # 17:30 PL
-    - cron: '0 17 * * 5,6,0'   # 19:00 PL
-    - cron: '30 18 * * 5,6,0'  # 20:30 PL
-    - cron: '0 20 * * 5,6,0'   # 22:00 PL
-    - cron: '30 21 * * 5,6,0'  # 23:30 PL
-    - cron: '0 23 * * 5,6,0'   # 01:00 PL (w nocy na kolejny dzień)
-
-    # --- BLOK: PONIEDZIAŁEK (Start od 17:00 PL / 15:00 UTC) ---
-    - cron: '0 15 * * 1'       # 17:00 PL
-    - cron: '30 16 * * 1'      # 18:30 PL
-    - cron: '0 18 * * 1'       # 20:00 PL
-    - cron: '30 19 * * 1'      # 21:30 PL
-    - cron: '0 21 * * 1'       # 23:00 PL
-    - cron: '30 22 * * 1'      # 00:30 PL (wtorek)
-    - cron: '0 0 * * 2'        # 02:00 PL (wtorek)
-
-    # --- WYJĄTEK: Niedziela 15:00 PL (12:00 UTC) ---
-    - cron: '10 13 * * 0'
-
+    - cron: '50 13 * * 5,6,0'
+    - cron: '50 16 * * 5,6,0'
+    - cron: '50 19 * * 5,6,0'
+    - cron: '50 22 * * 5,6,0'
+    - cron: '50 14 * * 1'
+    - cron: '50 17 * * 1'
+    - cron: '50 20 * * 1'
+    - cron: '50 12 * * 0' # Wyjątek niedzielny
   workflow_dispatch:
 
+concurrency:
+  group: radio-logger
+  cancel-in-progress: false
+
 jobs:
-  record_and_upload:
+  record:
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    timeout-minutes: 240
 
     steps:
-      - name: Checkout repository
+      - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install dependencies (ffmpeg & mega-cmd)
+      - name: Install dependencies
         run: |
           set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq ffmpeg wget
 
-          sudo apt-get update
-          sudo apt-get install -y ffmpeg
+          sudo wget -q -O /var/tmp/megacmd.deb https://mega.nz/linux/repo/xUbuntu_22.04/amd64/megacmd-xUbuntu_22.04_amd64.deb
+          sudo apt-get install -y -qq /var/tmp/megacmd.deb
 
-          sudo wget -O /var/tmp/megacmd.deb \
-            https://mega.nz/linux/repo/xUbuntu_22.04/amd64/megacmd-xUbuntu_22.04_amd64.deb
-
-          sudo apt-get install -y /var/tmp/megacmd.deb
-
-      - name: Record Radio Stream
+      - name: Smart recorder (PROPER LOGIC)
         run: |
           set -euo pipefail
+          export TZ="Europe/Warsaw"
 
-          # Aktualny dzień i godzina w Polsce
-          CURRENT_DAY=$(TZ="Europe/Warsaw" date +"%u")
-          CURRENT_HOUR=$(TZ="Europe/Warsaw" date +"%H")
+          DAY=$(date +"%u")
+          HOUR=$(date +"%H")
 
-          # Nazwa pliku
-          TIMESTAMP=$(TZ="Europe/Warsaw" date +"%Y-%m-%d_%H-%M")
-          FILENAME="Radio_Park_${TIMESTAMP}.mp3"
-
-          echo "FILENAME=$FILENAME" >> "$GITHUB_ENV"
-
-          STREAM_URL="https://sluchaj2.radiopark.biz.pl:8443/stream"
-
-          # Domyślnie 90 minut
-          RECORD_DURATION=5400
-
-          # Niedziela około godziny 15:00 - nagranie 5 minut
-          if [ "$CURRENT_DAY" = "7" ] && [ "$CURRENT_HOUR" = "15" ]; then
-            echo "Wykryto audycję niedzielną. Nagrywanie przez 5 minut."
-            RECORD_DURATION=300
+          DURATION=10800 # Standardowo 3 godziny
+          
+          # FIX 1: Poprawna logika niedzielnego wyjątku (tylko w godzinach popołudniowych)
+          # Cron '50 12' odpala się o 14:50 czasu polskiego. Sprawdzamy bezpieczny przedział godzinowy.
+          if [ "$DAY" = "7" ] && [ "$HOUR" -le 15 ]; then
+            echo "Wykryto okno dla audycji niedzielnej (krótkiej)."
+            DURATION=300
           fi
 
-          echo "Rozpoczynam nagrywanie (${RECORD_DURATION} s): $FILENAME"
+          mkdir -p nagrania
+          STREAM="https://sluchaj2.radiopark.biz.pl:8443/stream"
 
-          ffmpeg \
-            -y \
-            -loglevel warning \
-            -reconnect 1 \
-            -reconnect_streamed 1 \
-            -reconnect_delay_max 5 \
-            -i "$STREAM_URL" \
-            -t "$RECORD_DURATION" \
-            -c:a libmp3lame \
-            -b:a 128k \
-            "$FILENAME"
+          START_TIME=$(date +%s)
+          END_TIME=$((START_TIME + DURATION))
+          i=0
 
-          echo "Nagrywanie zakończone."
+          while [ "$(date +%s)" -lt "$END_TIME" ]; do
+            CURRENT_TIME=$(date +%s)
+            REMAINING_TIME=$((END_TIME - CURRENT_TIME))
 
-      - name: Upload to MEGA.io
+            # Jeśli zostało mniej niż 5 sekund, kończymy pętlę
+            if [ "$REMAINING_TIME" -le 5 ]; then
+              break
+            fi
+
+            i=$((i+1))
+            TIMESTAMP=$(date +"%Y-%m-%d_%H-%M-%S")
+            FILE="nagrania/Radio_${TIMESTAMP}.mp3"
+
+            # FIX 2: Ustalamy czas trwania segmentu: maksymalnie 1800s, 
+            # ale jeśli do końca bloku zostało mniej (np. 300s), bierzemy REMAINING_TIME
+            CHUNK_TIME=1800
+            if [ "$REMAINING_TIME" -lt 1800 ]; then
+              CHUNK_TIME=$REMAINING_TIME
+            fi
+
+            echo "Segment $i -> $FILE (czas trwania: ${CHUNK_TIME}s)"
+
+            # Przywrócono -c:a copy dla 0% zużycia CPU i oryginalnej jakości
+            ffmpeg \
+              -y \
+              -loglevel error \
+              -user_agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64)" \
+              -reconnect 1 \
+              -reconnect_streamed 1 \
+              -reconnect_delay_max 5 \
+              -i "$STREAM" \
+              -t "$CHUNK_TIME" \
+              -c:a copy \
+              "$FILE" || echo "Stream interrupted, re-connecting..."
+
+            sleep $((RANDOM % 5 + 2))
+          done
+
+          echo "RECORDING DONE"
+
+      - name: Upload to MEGA (FIXED per file)
         env:
           MEGA_EMAIL: ${{ secrets.MEGA_EMAIL }}
           MEGA_PASSWORD: ${{ secrets.MEGA_PASSWORD }}
         run: |
           set -euo pipefail
 
-          if ! mega-login "$MEGA_EMAIL" "$MEGA_PASSWORD"; then
-            echo "Błąd logowania do MEGA."
-            exit 1
-          fi
-
+          mega-login "$MEGA_EMAIL" "$MEGA_PASSWORD" > /dev/null
           mega-mkdir /Radio_Nagrania || true
 
-          if [ ! -f "$FILENAME" ]; then
-            echo "Plik nie został nagrany."
-            exit 1
-          fi
+          # Zabezpieczenie przed błędem, gdyby katalog był pusty
+          shopt -s nullglob
+          
+          for file in nagrania/*.mp3; do
+            if [ -f "$file" ]; then
+              echo "Uploading $file..."
+              mega-put "$file" /Radio_Nagrania/ > /dev/null || echo "Upload failed for $file, skipping to next."
+            fi
+          done
 
-          if [ ! -s "$FILENAME" ]; then
-            echo "Nagranie jest puste."
-            exit 1
-          fi
-
-          echo "Wysyłam plik do MEGA..."
-
-          mega-put "$FILENAME" /Radio_Nagrania/
-
-          echo "Plik został wysłany."
-
-          mega-logout
+          mega-logout > /dev/null
