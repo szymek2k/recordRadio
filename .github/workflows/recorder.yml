@@ -2,16 +2,14 @@ name: 🎙️ Radio Park FM - MAIN RECORDER
 
 on:
   schedule:
-    # 🎯 Uniwersalny strażnik - sprawdza kolejkę z formularza co 30 minut przez całą dobę
+    # Uniwersalny straznik - sprawdza kolejke co 30 minut
     - cron: '0,30 * * * *'
 
-    # Stały grafik audycji (wybudzenia 10 minut przed czasem)
-    # Piątki, Soboty i Niedziele
+    # Staly grafik audycji
     - cron: '50 13 * * 5,6,0'
     - cron: '50 16 * * 5,6,0'
     - cron: '50 19 * * 5,6,0'
     - cron: '50 22 * * 5,6,0'
-    # Poniedziałki
     - cron: '50 14 * * 1'
     - cron: '50 17 * * 1'
     - cron: '50 20 * * 1'
@@ -28,18 +26,18 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Sprawdź harmonogram i kolejkę
+      - name: Sprawdz harmonogram i kolejke
         run: |
           chmod +x scheduler/check_queue.sh
           ./scheduler/check_queue.sh
 
-      - name: Aktualizacja kolejki w repozytorium (tylko dla zadań z formularza)
+      - name: Aktualizacja kolejki w repozytorium
         if: env.START_RECORDING == 'true' && env.NEED_REPO_COMMIT == 'true'
         run: |
           git config --global user.name "GitHub Actions Bot"
           git config --global user.email "actions@github.com"
           git add scheduler/queue.json
-          git commit -m "🚀 Uruchomiono nagranie z formularza. Czyszczenie kolejki."
+          git commit -m "Uruchomiono nagranie z formularza. Czyszczenie kolejki."
           git push
 
       - name: Install dependencies
@@ -65,13 +63,10 @@ jobs:
           DURATION_SECS=${{ env.REC_DURATION }}
           END=$(( $(date +%s) + DURATION_SECS ))
           
-          # Obliczamy łączną przybliżoną liczbę segmentów 30-minutowych
           TOTAL_SEGMENTS=$(( (DURATION_SECS + 1799) / 1800 ))
           SEGMENT_COUNTER=1
           
-          echo "[MAIN] Rozpoczynam rejestrację strumienia na okres ${DURATION_SECS} sekund..."
-          echo "[MAIN] Łączna planowana liczba segmentów (co 30 min): $TOTAL_SEGMENTS"
-          echo "------------------------------------------------------------------"
+          echo "[MAIN] Rozpoczynam rejestracje strumienia..."
           
           while [ "$(date +%s)" -lt "$END" ]; do
             REM=$((END-$(date +%s)))
@@ -79,8 +74,7 @@ jobs:
             CHUNK=1800
             [ "$REM" -lt 1800 ] && CHUNK=$REM
             
-            # Wypisujemy w logach informację o bieżącym pliku
-            echo "🎙️ [$(date '+%H:%M:%S')] Rozpoczynam nagrywanie segmentu nr $SEGMENT_COUNTER z $TOTAL_SEGMENTS..."
+            echo "Rozpoczynam nagrywanie segmentu nr $SEGMENT_COUNTER z $TOTAL_SEGMENTS..."
             
             ffmpeg -y -loglevel error \
               -user_agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64)" \
@@ -92,13 +86,11 @@ jobs:
               -i "$STREAM" -t "$CHUNK" -c:a copy \
               "nagrania/Radio_$(date +%F_%H-%M-%S).mp3" || true
             
-            echo "💾 [$(date '+%H:%M:%S')] Zakończono segment nr $SEGMENT_COUNTER."
-            echo "------------------------------------------------------------------"
+            echo "Zakonczono segment nr $SEGMENT_COUNTER."
             
             SEGMENT_COUNTER=$((SEGMENT_COUNTER + 1))
             sleep $((RANDOM%5+2))
           done
-          echo "✅ Wszystkie segmenty zostały pomyślnie zapisane lokalnie."
 
       - name: Upload Main to MEGA
         if: env.START_RECORDING == 'true' && env.REC_MEGA == 'true'
@@ -119,10 +111,10 @@ jobs:
           done
           mega-logout > /dev/null
 
-      - name: Wywołaj Backup Workflow
+      - name: Wywolaj Backup Workflow
         if: env.START_RECORDING == 'true' && env.REC_BACKUP == 'true'
         run: |
-          echo "Wysyłam żądanie API o uruchomienie niezależnego procesu Backup..."
+          echo "Wysylam zadanie API..."
           curl -X POST \
             -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
             -H "Accept: application/vnd.github.v3+json" \
