@@ -1,3 +1,53 @@
+#!/bin/bash
+set -euo pipefail
+
+FILE="scheduler/queue.json"
+export TZ="Europe/Warsaw"
+
+CURRENT_TIMESTAMP=$(date +%s)
+CURRENT_DATE=$(date '+%Y-%m-%d')
+CURRENT_TIME=$(date '+%H:%M')
+
+echo "🕒 Aktualny czas systemowy: $(date '+%Y-%m-%d %H:%M:%S')"
+
+# =========================================================================
+# SCENARIUSZ A: Istnieje zadanie w kolejce (Ręczne planowanie / Nadpisanie)
+# =========================================================================
+if [ -s "$FILE" ] && [ "$(jq '. | length' "$FILE")" -gt 0 ]; then
+  echo "📅 Wykryto zaplanowane zadanie w queue.json. Sprawdzam..."
+
+  JOB=$(jq '.[0]' "$FILE")
+  JOB_DATE=$(echo "$JOB" | jq -r '.date')
+  JOB_TIME=$(echo "$JOB" | jq -r '.time')
+  DURATION=$(echo "$JOB" | jq -r '.duration')
+  BACKUP=$(echo "$JOB" | jq -r '.backup')
+  MEGA=$(echo "$JOB" | jq -r '.mega')
+
+  TARGET_DATETIME="$JOB_DATE $JOB_TIME"
+  TARGET_TIMESTAMP=$(date -d "$TARGET_DATETIME" +%s 2>/dev/null || echo "")
+
+  if [ -n "$TARGET_TIMESTAMP" ]; then
+    DIFF=$((TARGET_TIMESTAMP - CURRENT_TIMESTAMP))
+    echo "⏳ Sekundy do zaplanowanego zadania: $DIFF s"
+
+    # Zmiana: Akceptujemy uruchomienie od 15 minut przed czasem do 10 minut po czasie audycji
+    # Idealnie dostosowane do odpalania skryptu co 30 minut.
+    if [ "$DIFF" -le 900 ] && [ "$DIFF" -ge -600 ]; then
+      echo "🚀 [Kolejka] Uruchamiam nagranie z formularza!"
+      echo "START_RECORDING=true" >> "$GITHUB_ENV"
+      echo "REC_DURATION=$DURATION" >> "$GITHUB_ENV"
+      echo "REC_BACKUP=$BACKUP" >> "$GITHUB_ENV"
+      echo "REC_MEGA=$MEGA" >> "$GITHUB_ENV"
+
+      # Usuwamy obsłużone zadanie z kolejki
+      jq 'del(.[0])' "$FILE" > tmp.json && mv tmp.json "$FILE"
+      echo "NEED_REPO_COMMIT=true" >> "$GITHUB_ENV"
+      exit 0
+    fi
+  fi
+  echo "😴 Zadanie z kolejki jest na inną godzinę/dzień."
+fi
+
 # =========================================================================
 # SCENARIUSZ B: Kolejka pusta lub brak dopasowania -> Działamy według CRONA
 # =========================================================================
@@ -8,9 +58,7 @@ HHMM=$(date '+%H:%M')
 
 IS_CRON_MATCH=false
 
-# Rozszerzamy okno: akceptujemy uruchomienie od XX:45 do połowy kolejnej godziny (XX:30)
-# zabezpieczając skrypt przed dużymi opóźnieniami infrastruktury GitHub Actions.
-
+# Zmiana: Szerokie okna czasowe (do XX:31) zabezpieczające przed lagami GitHuba
 case "$DAY_OF_WEEK" in
   5|6|7) # Piątek, Sobota, Niedziela
     if [[ "$HHMM" > "13:44" && "$HHMM" < "14:31" ]] || \
@@ -28,3 +76,16 @@ case "$DAY_OF_WEEK" in
     fi
     ;;
 esac
+
+if [ "$IS_CRON_MATCH" = true ]; then
+  echo "🎯 Wykryto dopasowanie z harmonogramem cron! Uruchamiam standardowe nagranie."
+  echo "START_RECORDING=true" >> "$GITHUB_ENV"
+  echo "REC_DURATION=10800" >> "$GITHUB_ENV"
+  echo "REC_BACKUP=true" >> "$GITHUB_ENV"
+  echo "REC_MEGA=true" >> "$GITHUB_ENV"
+  echo "NEED_REPO_COMMIT=false" >> "$GITHUB_ENV"
+else
+  echo "🛑 Brak dopasowania. To uruchomienie nie pokrywa się z żadną audycją."
+  echo "START_RECORDING=false" >> "$GITHUB_ENV"
+  echo "NEED_REPO_COMMIT=false" >> "$GITHUB_ENV"
+fi

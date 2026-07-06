@@ -2,7 +2,11 @@ name: 🎙️ Radio Park FM - MAIN RECORDER
 
 on:
   schedule:
-    # Piątki, Soboty i Niedziele (5,6,0 w składni crona GitHub Actions, gdzie 0 = Niedziela)
+    # 🎯 NOWOŚĆ: Uniwersalny strażnik - sprawdza kolejkę z formularza co 30 minut przez całą dobę
+    - cron: '0,30 * * * *'
+
+    # Stały grafik audycji (wybudzenia 10 minut przed czasem)
+    # Piątki, Soboty i Niedziele
     - cron: '50 13 * * 5,6,0'
     - cron: '50 16 * * 5,6,0'
     - cron: '50 19 * * 5,6,0'
