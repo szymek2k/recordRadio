@@ -65,26 +65,40 @@ jobs:
           DURATION_SECS=${{ env.REC_DURATION }}
           END=$(( $(date +%s) + DURATION_SECS ))
           
+          # Obliczamy łączną przybliżoną liczbę segmentów 30-minutowych
+          TOTAL_SEGMENTS=$(( (DURATION_SECS + 1799) / 1800 ))
+          SEGMENT_COUNTER=1
+          
           echo "[MAIN] Rozpoczynam rejestrację strumienia na okres ${DURATION_SECS} sekund..."
-
+          echo "[MAIN] Łączna planowana liczba segmentów (co 30 min): $TOTAL_SEGMENTS"
+          echo "------------------------------------------------------------------"
+          
           while [ "$(date +%s)" -lt "$END" ]; do
-            REM=$((END-$(date +%s)))
-            [ "$REM" -le 5 ] && break
-            CHUNK=1800
-            [ "$REM" -lt 1800 ] && CHUNK=$REM
+          REM=$((END-$(date +%s)))
+          [ "$REM" -le 5 ] && break
+          CHUNK=1800
+          [ "$REM" -lt 1800 ] && CHUNK=$REM
           
-            ffmpeg -y -loglevel error \
-              -user_agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64)" \
-              -reconnect 1 \
-              -reconnect_streamed 1 \
-              -reconnect_at_eof 1 \
-              -reconnect_on_network_error 1 \
-              -reconnect_delay_max 5 \
-              -i "$STREAM" -t "$CHUNK" -c:a copy \
-              "nagrania/Radio_$(date +%F_%H-%M-%S).mp3" || true
+          # Wypisujemy w logach informację o bieżącym pliku
+          echo "🎙️ [$(date '+%H:%M:%S')] Rozpoczynam nagrywanie segmentu nr $SEGMENT_COUNTER z $TOTAL_SEGMENTS..."
           
-            sleep $((RANDOM%5+2))
+          ffmpeg -y -loglevel error \
+           -user_agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64)" \
+           -reconnect 1 \
+           -reconnect_streamed 1 \
+           -reconnect_at_eof 1 \
+           -reconnect_on_network_error 1 \
+           -reconnect_delay_max 5 \
+           -i "$STREAM" -t "$CHUNK" -c:a copy \
+           "nagrania/Radio_$(date +%F_%H-%M-%S).mp3" || true
+          
+          echo "💾 [$(date '+%H:%M:%S')] Zakończono segment nr $SEGMENT_COUNTER."
+          echo "------------------------------------------------------------------"
+          
+          SEGMENT_COUNTER=$((SEGMENT_COUNTER + 1))
+          sleep $((RANDOM%5+2))
           done
+          echo "✅ Wszystkie segmenty zostały pomyślnie zapisane lokalnie."     
 
       - name: Upload Main to MEGA
         if: env.START_RECORDING == 'true' && env.REC_MEGA == 'true'
