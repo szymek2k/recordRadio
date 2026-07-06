@@ -1,0 +1,59 @@
+name: 📅 Zaplanuj Nagranie (DVR)
+
+on:
+  workflow_dispatch:
+    inputs:
+      date:
+        description: 'Data nagrania (RRRR-MM-DD)'
+        required: true
+        default: '2026-07-06'
+      time:
+        description: 'Godzina nagrania (GG:MM w czasie Europe/Warsaw)'
+        required: true
+        default: '17:00'
+      duration:
+        description: 'Czas nagrania (w sekundach: 10800 = 3h, 4800 = 1h20m)'
+        required: true
+        default: '10800'
+      backup:
+        description: 'Czy uruchomić zapasowy proces (Backup) pod koniec?'
+        type: boolean
+        default: true
+      mega:
+        description: 'Czy wysłać nagranie na MEGA?'
+        type: boolean
+        default: true
+
+jobs:
+  add-to-queue:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Dopisz do kolejki JSON
+        run: |
+          mkdir -p scheduler
+          FILE=scheduler/queue.json
+          
+          if [ ! -s "$FILE" ]; then
+            echo "[]" > "$FILE"
+          fi
+          
+          NEW_JOB=$(jq -n \
+            --arg date "${{ inputs.date }}" \
+            --arg time "${{ inputs.time }}" \
+            --arg duration "${{ inputs.duration }}" \
+            --arg backup "${{ inputs.backup }}" \
+            --arg mega "${{ inputs.mega }}" \
+            '{date: $date, time: $time, duration: ($duration|tonumber), backup: ($backup|test("true")), mega: ($mega|test("true"))}')
+          
+          jq ". += [$NEW_JOB]" "$FILE" > tmp.json && mv tmp.json "$FILE"
+
+      - name: Commit i Push zmian
+        run: |
+          git config --global user.name "GitHub Actions Bot"
+          git config --global user.email "actions@github.com"
+          git add scheduler/queue.json
+          git commit -m "📅 DVR: Dodano zadanie na ${{ inputs.date }} ${{ inputs.time }}"
+          git push
