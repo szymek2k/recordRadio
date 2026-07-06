@@ -13,7 +13,7 @@ on:
 
 jobs:
   # =========================================================================
-  # 1. PROCES GŁÓWNY (Działa od razu przez 3 godziny, tnie pliki co 30 minut)
+  # 1. PROCES GŁÓWNY (Czeka na równą godzinę, działa 3 godziny)
   # =========================================================================
   record:
     runs-on: ubuntu-latest
@@ -38,6 +38,47 @@ jobs:
           set -euo pipefail
           export TZ="Europe/Warsaw"
 
+          CURRENT_SECS=$(date +%s)
+          
+          # Planowane godziny cronów w minutach od północy w czasie UTC (zawsze stałe dla GitHuba)
+          # 13:50 -> 830, 14:50 -> 890, 16:50 -> 1010, 17:50 -> 1070, 19:50 -> 1190, 20:50 -> 1250, 22:50 -> 1370
+          PLANNED_MINUTES_UTC=(830 890 1010 1070 1190 1250 1370)
+          
+          CURR_H_UTC=$(date -u +"%H")
+          CURR_M_UTC=$(date -u +"%M")
+          NOW_IN_MINS_UTC=$(( 10#$CURR_H_UTC * 60 + 10#$CURR_M_UTC ))
+
+          BEST_MATCH=${PLANNED_MINUTES_UTC[0]}
+          MIN_DIFF=9999
+
+          for item in "${PLANNED_MINUTES_UTC[@]}"; do
+            DIFF=$(( NOW_IN_MINS_UTC - item ))
+            if [ "$DIFF" -ge 0 ] && [ "$DIFF" -lt "$MIN_DIFF" ] && [ "$DIFF" -lt 120 ]; then
+              MIN_DIFF=$DIFF
+              BEST_MATCH=$item
+            fi
+          done
+
+          # Obliczamy docelowy start nagrywania w czasie lokalnym Warszawy
+          # Wykryty cron był o danej godzinie UTC. Chcemy ruszyć 10 minut później (o równej godzinie).
+          # Konwertujemy czas bazowy UTC na timestamp i dodajemy 10 minut (600 sekund).
+          CRON_H=$(( BEST_MATCH / 60 ))
+          CRON_M=$(( BEST_MATCH % 60 ))
+          TARGET_START_SECS=$(date -d "$(date -u +%Y-%m-%d) ${CRON_H}:${CRON_M}:00 UTC" +%s)
+          TARGET_START_SECS=$(( TARGET_START_SECS + 600 ))
+
+          SLEEP_SECS=$(( TARGET_START_SECS - CURRENT_SECS ))
+
+          if [ "$SLEEP_SECS" -gt 0 ]; then
+            echo "[MAIN] Wykryto cron o godzinie ${CRON_H}:${CRON_M} UTC."
+            echo "[MAIN] Opóźnienie GitHuba wyniosło: ${MIN_DIFF} min."
+            echo "[MAIN] Czekam dynamicznie przez ${SLEEP_SECS} sekund na pełną godzinę (czasu PL)..."
+            sleep "$SLEEP_SECS"
+          else
+            echo "[MAIN] Opóźnienie GitHuba przekroczyło okno (lub start ręczny). Start natychmiastowy!"
+          fi
+
+          # Rozpoczęcie właściwego nagrywania
           DURATION=10800 # 3 godziny
           mkdir -p nagrania
           STREAM="https://sluchaj2.radiopark.biz.pl:8443/stream"
@@ -77,7 +118,7 @@ jobs:
               -c:a copy \
               "$FILE" || echo "Stream interrupted, re-connecting..."
 
-            sleep $((RANDOM % 5 + 2))
+            sleep "$((RANDOM % 5 + 2))"
           done
 
           echo "RECORDING MAIN DONE"
@@ -101,7 +142,7 @@ jobs:
           mega-logout > /dev/null
 
   # =========================================================================
-  # 2. PROCES ZABEZPIECZAJĄCY (Inteligentny dynamiczny sleep + segmentacja)
+  # 2. PROCES ZABEZPIECZAJĄCY (Czeka 2 godziny i 20 minut od planowanego crona)
   # =========================================================================
   backup-record:
     runs-on: ubuntu-latest
@@ -128,43 +169,43 @@ jobs:
 
           CURRENT_SECS=$(date +%s)
           
-          # Definiujemy planowane godziny startu cronów w minutach od północy (czas PL)
-          # 13:50->830, 14:50->890, 16:50->1010, 17:50->1070, 19:50->1190, 20:50->1250, 22:50->1370
-          PLANNED_MINUTES=(830 890 1010 1070 1190 1250 1370)
+          # Planowane godziny cronów w minutach od północy w czasie UTC
+          PLANNED_MINUTES_UTC=(830 890 1010 1070 1190 1250 1370)
           
-          CURR_H=$(date +"%H")
-          CURR_M=$(date +"%M")
-          NOW_IN_MINS=$(( 10#$CURR_H * 60 + 10#$CURR_M ))
+          CURR_H_UTC=$(date -u +"%H")
+          CURR_M_UTC=$(date -u +"%M")
+          NOW_IN_MINS_UTC=$(( 10#$CURR_H_UTC * 60 + 10#$CURR_M_UTC ))
 
-          BEST_MATCH=${PLANNED_MINUTES[0]}
+          BEST_MATCH=${PLANNED_MINUTES_UTC[0]}
           MIN_DIFF=9999
 
-          for item in "${PLANNED_MINUTES[@]}"; do
-            DIFF=$(( NOW_IN_MINS - item ))
-            # Szukamy crona, który planowo miał ruszyć nie dawniej niż 120 minut temu
+          for item in "${PLANNED_MINUTES_UTC[@]}"; do
+            DIFF=$(( NOW_IN_MINS_UTC - item ))
             if [ "$DIFF" -ge 0 ] && [ "$DIFF" -lt "$MIN_DIFF" ] && [ "$DIFF" -lt 120 ]; then
               MIN_DIFF=$DIFF
               BEST_MATCH=$item
             fi
           done
 
-          # Obliczamy docelowy czas startu backupu (zawsze dokładnie 140 minut po PLANOWANYM cronie)
-          START_OF_DAY_SECS=$(date -d "00:00:00" +%s)
-          TARGET_START_SECS=$(( START_OF_DAY_SECS + (BEST_MATCH * 60) + 8400 ))
+          # Obliczamy docelowy start backupu: dokładnie 140 minut (8400 sekund) po planowanym cronie UTC
+          CRON_H=$(( BEST_MATCH / 60 ))
+          CRON_M=$(( BEST_MATCH % 60 ))
+          TARGET_START_SECS=$(date -d "$(date -u +%Y-%m-%d) ${CRON_H}:${CRON_M}:00 UTC" +%s)
+          TARGET_START_SECS=$(( TARGET_START_SECS + 8400 ))
 
           # Dynamiczny obliczony sleep
           SLEEP_SECS=$(( TARGET_START_SECS - CURRENT_SECS ))
 
           if [ "$SLEEP_SECS" -gt 0 ]; then
-            echo "Wykryto planowany cron o godzinie $((BEST_MATCH / 60)):$((BEST_MATCH % 60))"
-            echo "GitHub opóźnił start o: $(( MIN_DIFF )) min."
-            echo "Czekam dynamicznie przez ${SLEEP_SECS} sekund..."
+            echo "[BACKUP] Wykryto cron o godzinie ${CRON_H}:${CRON_M} UTC."
+            echo "[BACKUP] GitHub opóźnił start o: ${MIN_DIFF} min."
+            echo "[BACKUP] Czekam dynamicznie przez ${SLEEP_SECS} sekund na swoje okno..."
             sleep "$SLEEP_SECS"
           else
-            echo "Opóźnienie GitHuba przekroczyło okno zakładki ($(( MIN_DIFF )) min). Start natychmiastowy!"
+            echo "[BACKUP] Opóźnienie GitHuba przekroczyło okno zakładki. Start natychmiastowy!"
           fi
 
-          # Rozpoczęcie nagrywania z podziałem na części
+          # Rozpoczęcie nagrywania awaryjnego
           DURATION=4800 # 1 godzina 20 minut
           mkdir -p nagrania_backup
           STREAM="https://sluchaj2.radiopark.biz.pl:8443/stream"
@@ -183,7 +224,6 @@ jobs:
 
             i=$((i+1))
             TIMESTAMP=$(date +"%Y-%m-%d_%H-%M-%S")
-            # Adnotacja _BACKUP w nazwie pliku
             FILE="nagrania_backup/Radio_${TIMESTAMP}_BACKUP.mp3"
 
             CHUNK_TIME=1800
@@ -205,7 +245,7 @@ jobs:
               -c:a copy \
               "$FILE" || echo "Stream interrupted, re-connecting..."
 
-            sleep $((RANDOM % 5 + 2))
+            sleep "$((RANDOM % 5 + 2))"
           done
 
           echo "RECORDING BACKUP DONE"
