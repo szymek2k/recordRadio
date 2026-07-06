@@ -32,7 +32,7 @@ jobs:
           ./scheduler/check_queue.sh
 
       - name: Aktualizacja kolejki w repozytorium
-        if: env.START_RECORDING == 'true' && env.NEED_REPO_COMMIT == 'true'
+        if: env['START_RECORDING'] == 'true' && env['NEED_REPO_COMMIT'] == 'true'
         run: |
           git config --global user.name "GitHub Actions Bot"
           git config --global user.email "actions@github.com"
@@ -41,7 +41,7 @@ jobs:
           git push
 
       - name: Install dependencies
-        if: env.START_RECORDING == 'true'
+        if: env['START_RECORDING'] == 'true'
         run: |
           set -euo pipefail
           sudo apt-get update -qq
@@ -52,7 +52,7 @@ jobs:
           sudo apt-get install -y -qq /tmp/megacmd.deb
 
       - name: Recorder (MAIN PROCESS)
-        if: env.START_RECORDING == 'true'
+        if: env['START_RECORDING'] == 'true'
         run: |
           set -euo pipefail
           export TZ=Europe/Warsaw
@@ -93,7 +93,7 @@ jobs:
           done
 
       - name: Upload Main to MEGA
-        if: env.START_RECORDING == 'true' && env.REC_MEGA == 'true'
+        if: env['START_RECORDING'] == 'true' && env['REC_MEGA'] == 'true'
         env:
           MEGA_EMAIL: ${{ secrets.MEGA_EMAIL }}
           MEGA_PASSWORD: ${{ secrets.MEGA_PASSWORD }}
@@ -112,7 +112,7 @@ jobs:
           mega-logout > /dev/null
 
       - name: Wywolaj Backup Workflow
-        if: env.START_RECORDING == 'true' && env.REC_BACKUP == 'true'
+        if: env['START_RECORDING'] == 'true' && env['REC_BACKUP'] == 'true'
         run: |
           echo "Wysylam zadanie API..."
           curl -X POST \
