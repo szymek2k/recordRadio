@@ -1,4 +1,4 @@
-name: Radio Park FM - ULTIMATE LOGGER (FIXED & TESTED)
+name: Radio Park FM - ULTIMATE LOGGER (FIXED)
 
 on:
   schedule:
@@ -19,109 +19,79 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 240
     concurrency:
-      group: radio-logger-main-${{ github.run_id }}
+      group: radio-logger-main
+      cancel-in-progress: false
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
       - name: Install dependencies
         run: |
           set -euo pipefail
           sudo apt-get update -qq
-          sudo apt-get install -y -qq ffmpeg wget
-          sudo wget -q -O /var/tmp/megacmd.deb https://mega.nz/linux/repo/xUbuntu_22.04/amd64/megacmd-xUbuntu_22.04_amd64.deb
-          sudo apt-get install -y -qq /var/tmp/megacmd.deb
+          sudo apt-get install -y -qq ffmpeg wget lsb-release
+          UBUNTU=$(lsb_release -rs)
+          wget -q -O /tmp/megacmd.deb https://mega.nz/linux/repo/xUbuntu_${UBUNTU}/amd64/megacmd-xUbuntu_${UBUNTU}_amd64.deb \
+            || wget -q -O /tmp/megacmd.deb https://mega.nz/linux/repo/xUbuntu_22.04/amd64/megacmd-xUbuntu_22.04_amd64.deb
+          sudo apt-get install -y -qq /tmp/megacmd.deb
 
-      - name: Smart recorder (MAIN PROCESS)
+      - name: Recorder (MAIN PROCESS)
         run: |
           set -euo pipefail
-          export TZ="Europe/Warsaw"
+          export TZ=Europe/Warsaw
 
-          CURRENT_SECS=$(date +%s)
-          
-          # Planowane godziny cronów w minutach od północy w czasie UTC (zawsze stałe dla GitHuba)
-          # 13:50 -> 830, 14:50 -> 890, 16:50 -> 1010, 17:50 -> 1070, 19:50 -> 1190, 20:50 -> 1250, 22:50 -> 1370
           PLANNED_MINUTES_UTC=(830 890 1010 1070 1190 1250 1370)
-          
-          CURR_H_UTC=$(date -u +"%H")
-          CURR_M_UTC=$(date -u +"%M")
-          NOW_IN_MINS_UTC=$(( 10#$CURR_H_UTC * 60 + 10#$CURR_M_UTC ))
+          CURR_H_UTC=$(date -u +%H)
+          CURR_M_UTC=$(date -u +%M)
+          NOW_IN_MINS_UTC=$((10#$CURR_H_UTC*60+10#$CURR_M_UTC))
 
-          BEST_MATCH=${PLANNED_MINUTES_UTC[0]}
-          MIN_DIFF=9999
-
+          BEST_MATCH=""
+          MIN_DIFF=999999
           for item in "${PLANNED_MINUTES_UTC[@]}"; do
-            DIFF=$(( NOW_IN_MINS_UTC - item ))
-            if [ "$DIFF" -ge 0 ] && [ "$DIFF" -lt "$MIN_DIFF" ] && [ "$DIFF" -lt 120 ]; then
+            DIFF=$((NOW_IN_MINS_UTC-item))
+            [ "$DIFF" -lt -720 ] && DIFF=$((DIFF+1440))
+            [ "$DIFF" -gt 720 ] && DIFF=$((DIFF-1440))
+            if [ "$DIFF" -ge 0 ] && [ "$DIFF" -lt "$MIN_DIFF" ]; then
               MIN_DIFF=$DIFF
               BEST_MATCH=$item
             fi
           done
+          [ -z "$BEST_MATCH" ] && { echo "No cron match"; exit 1; }
 
-          # Obliczamy docelowy start nagrywania w czasie lokalnym Warszawy
-          # Wykryty cron był o danej godzinie UTC. Chcemy ruszyć 10 minut później (o równej godzinie).
-          # Konwertujemy czas bazowy UTC na timestamp i dodajemy 10 minut (600 sekund).
-          CRON_H=$(( BEST_MATCH / 60 ))
-          CRON_M=$(( BEST_MATCH % 60 ))
-          TARGET_START_SECS=$(date -d "$(date -u +%Y-%m-%d) ${CRON_H}:${CRON_M}:00 UTC" +%s)
-          TARGET_START_SECS=$(( TARGET_START_SECS + 600 ))
-
-          SLEEP_SECS=$(( TARGET_START_SECS - CURRENT_SECS ))
-
+          CRON_H=$((BEST_MATCH/60))
+          CRON_M=$((BEST_MATCH%60))
+          CURRENT_SECS=$(date +%s)
+          TARGET_START_SECS=$(date -d "$(date -u +%F) ${CRON_H}:${CRON_M}:00 UTC" +%s)
+          TARGET_START_SECS=$((TARGET_START_SECS+600))
+          SLEEP_SECS=$((TARGET_START_SECS-CURRENT_SECS))
+          
           if [ "$SLEEP_SECS" -gt 0 ]; then
-            echo "[MAIN] Wykryto cron o godzinie ${CRON_H}:${CRON_M} UTC."
-            echo "[MAIN] Opóźnienie GitHuba wyniosło: ${MIN_DIFF} min."
-            echo "[MAIN] Czekam dynamicznie przez ${SLEEP_SECS} sekund na pełną godzinę (czasu PL)..."
+            echo "[MAIN] Czekam dynamicznie przez ${SLEEP_SECS} s..."
             sleep "$SLEEP_SECS"
-          else
-            echo "[MAIN] Opóźnienie GitHuba przekroczyło okno (lub start ręczny). Start natychmiastowy!"
           fi
 
-          # Rozpoczęcie właściwego nagrywania
-          DURATION=10800 # 3 godziny
           mkdir -p nagrania
           STREAM="https://sluchaj2.radiopark.biz.pl:8443/stream"
+          END=$(( $(date +%s)+10800 ))
 
-          START_TIME=$(date +%s)
-          END_TIME=$((START_TIME + DURATION))
-          i=0
-
-          while [ "$(date +%s)" -lt "$END_TIME" ]; do
-            CURRENT_TIME=$(date +%s)
-            REMAINING_TIME=$((END_TIME - CURRENT_TIME))
-
-            if [ "$REMAINING_TIME" -le 5 ]; then
-              break
-            fi
-
-            i=$((i+1))
-            TIMESTAMP=$(date +"%Y-%m-%d_%H-%M-%S")
-            FILE="nagrania/Radio_${TIMESTAMP}.mp3"
-
-            CHUNK_TIME=1800
-            if [ "$REMAINING_TIME" -lt 1800 ]; then
-              CHUNK_TIME=$REMAINING_TIME
-            fi
-
-            echo "Segment MAIN $i -> $FILE (czas trwania: ${CHUNK_TIME}s)"
-
-            ffmpeg \
-              -y \
-              -loglevel error \
+          while [ "$(date +%s)" -lt "$END" ]; do
+            REM=$((END-$(date +%s)))
+            [ "$REM" -le 5 ] && break
+            CHUNK=1800
+            [ "$REM" -lt 1800 ] && CHUNK=$REM
+            
+            ffmpeg -y -loglevel error \
               -user_agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64)" \
               -reconnect 1 \
               -reconnect_streamed 1 \
+              -reconnect_at_eof 1 \
+              -reconnect_on_network_error 1 \
               -reconnect_delay_max 5 \
-              -i "$STREAM" \
-              -t "$CHUNK_TIME" \
-              -c:a copy \
-              "$FILE" || echo "Stream interrupted, re-connecting..."
-
-            sleep "$((RANDOM % 5 + 2))"
+              -i "$STREAM" -t "$CHUNK" -c:a copy \
+              "nagrania/Radio_$(date +%F_%H-%M-%S).mp3" || true
+            
+            sleep $((RANDOM%5+2))
           done
-
-          echo "RECORDING MAIN DONE"
 
       - name: Upload Main to MEGA
         env:
@@ -131,124 +101,95 @@ jobs:
           set -euo pipefail
           mega-login "$MEGA_EMAIL" "$MEGA_PASSWORD" > /dev/null
           mega-mkdir /Radio_Nagrania || true
-          
           shopt -s nullglob
           for file in nagrania/*.mp3; do
             if [ -f "$file" ]; then
               echo "Uploading $file..."
-              mega-put "$file" /Radio_Nagrania/ > /dev/null || echo "Upload failed for $file, skipping to next."
+              mega-put "$file" /Radio_Nagrania/ > /dev/null || echo "Upload failed for $file, skipping."
             fi
           done
           mega-logout > /dev/null
 
   # =========================================================================
-  # 2. PROCES ZABEZPIECZAJĄCY (Czeka 2 godziny i 20 minut od planowanego crona)
+  # 2. PROCES ZABEZPIECZAJĄCY (Czeka dłużej, nagrywa 1h 20 min)
   # =========================================================================
   backup-record:
     runs-on: ubuntu-latest
     timeout-minutes: 240
     concurrency:
-      group: radio-logger-backup-${{ github.run_id }}
+      group: radio-logger-backup
+      cancel-in-progress: false
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
       - name: Install dependencies
         run: |
           set -euo pipefail
           sudo apt-get update -qq
-          sudo apt-get install -y -qq ffmpeg wget
-          sudo wget -q -O /var/tmp/megacmd.deb https://mega.nz/linux/repo/xUbuntu_22.04/amd64/megacmd-xUbuntu_22.04_amd64.deb
-          sudo apt-get install -y -qq /var/tmp/megacmd.deb
+          sudo apt-get install -y -qq ffmpeg wget lsb-release
+          UBUNTU=$(lsb_release -rs)
+          wget -q -O /tmp/megacmd.deb https://mega.nz/linux/repo/xUbuntu_${UBUNTU}/amd64/megacmd-xUbuntu_${UBUNTU}_amd64.deb \
+            || wget -q -O /tmp/megacmd.deb https://mega.nz/linux/repo/xUbuntu_22.04/amd64/megacmd-xUbuntu_22.04_amd64.deb
+          sudo apt-get install -y -qq /tmp/megacmd.deb
 
-      - name: Wait for backup window and record (BACKUP PROCESS)
+      - name: Recorder (BACKUP PROCESS)
         run: |
           set -euo pipefail
-          export TZ="Europe/Warsaw"
+          export TZ=Europe/Warsaw
 
-          CURRENT_SECS=$(date +%s)
-          
-          # Planowane godziny cronów w minutach od północy w czasie UTC
           PLANNED_MINUTES_UTC=(830 890 1010 1070 1190 1250 1370)
-          
-          CURR_H_UTC=$(date -u +"%H")
-          CURR_M_UTC=$(date -u +"%M")
-          NOW_IN_MINS_UTC=$(( 10#$CURR_H_UTC * 60 + 10#$CURR_M_UTC ))
+          CURR_H_UTC=$(date -u +%H)
+          CURR_M_UTC=$(date -u +%M)
+          NOW_IN_MINS_UTC=$((10#$CURR_H_UTC*60+10#$CURR_M_UTC))
 
-          BEST_MATCH=${PLANNED_MINUTES_UTC[0]}
-          MIN_DIFF=9999
-
+          BEST_MATCH=""
+          MIN_DIFF=999999
           for item in "${PLANNED_MINUTES_UTC[@]}"; do
-            DIFF=$(( NOW_IN_MINS_UTC - item ))
-            if [ "$DIFF" -ge 0 ] && [ "$DIFF" -lt "$MIN_DIFF" ] && [ "$DIFF" -lt 120 ]; then
+            DIFF=$((NOW_IN_MINS_UTC-item))
+            [ "$DIFF" -lt -720 ] && DIFF=$((DIFF+1440))
+            [ "$DIFF" -gt 720 ] && DIFF=$((DIFF-1440))
+            if [ "$DIFF" -ge 0 ] && [ "$DIFF" -lt "$MIN_DIFF" ]; then
               MIN_DIFF=$DIFF
               BEST_MATCH=$item
             fi
           done
+          [ -z "$BEST_MATCH" ] && { echo "No cron match"; exit 1; }
 
-          # Obliczamy docelowy start backupu: dokładnie 140 minut (8400 sekund) po planowanym cronie UTC
-          CRON_H=$(( BEST_MATCH / 60 ))
-          CRON_M=$(( BEST_MATCH % 60 ))
-          TARGET_START_SECS=$(date -d "$(date -u +%Y-%m-%d) ${CRON_H}:${CRON_M}:00 UTC" +%s)
-          TARGET_START_SECS=$(( TARGET_START_SECS + 8400 ))
-
-          # Dynamiczny obliczony sleep
-          SLEEP_SECS=$(( TARGET_START_SECS - CURRENT_SECS ))
-
+          CRON_H=$((BEST_MATCH/60))
+          CRON_M=$((BEST_MATCH%60))
+          CURRENT_SECS=$(date +%s)
+          TARGET_START_SECS=$(date -d "$(date -u +%F) ${CRON_H}:${CRON_M}:00 UTC" +%s)
+          TARGET_START_SECS=$((TARGET_START_SECS+8400)) # Okno backupu (+2h 20m)
+          SLEEP_SECS=$((TARGET_START_SECS-CURRENT_SECS))
+          
           if [ "$SLEEP_SECS" -gt 0 ]; then
-            echo "[BACKUP] Wykryto cron o godzinie ${CRON_H}:${CRON_M} UTC."
-            echo "[BACKUP] GitHub opóźnił start o: ${MIN_DIFF} min."
-            echo "[BACKUP] Czekam dynamicznie przez ${SLEEP_SECS} sekund na swoje okno..."
+            echo "[BACKUP] Czekam dynamicznie przez ${SLEEP_SECS} s..."
             sleep "$SLEEP_SECS"
-          else
-            echo "[BACKUP] Opóźnienie GitHuba przekroczyło okno zakładki. Start natychmiastowy!"
           fi
 
-          # Rozpoczęcie nagrywania awaryjnego
-          DURATION=4800 # 1 godzina 20 minut
           mkdir -p nagrania_backup
           STREAM="https://sluchaj2.radiopark.biz.pl:8443/stream"
+          END=$(( $(date +%s)+4800 )) # Czas trwania: 1 godzina 20 minut
 
-          START_TIME=$(date +%s)
-          END_TIME=$((START_TIME + DURATION))
-          i=0
-
-          while [ "$(date +%s)" -lt "$END_TIME" ]; do
-            CURRENT_TIME=$(date +%s)
-            REMAINING_TIME=$((END_TIME - CURRENT_TIME))
-
-            if [ "$REMAINING_TIME" -le 5 ]; then
-              break
-            fi
-
-            i=$((i+1))
-            TIMESTAMP=$(date +"%Y-%m-%d_%H-%M-%S")
-            FILE="nagrania_backup/Radio_${TIMESTAMP}_BACKUP.mp3"
-
-            CHUNK_TIME=1800
-            if [ "$REMAINING_TIME" -lt 1800 ]; then
-              CHUNK_TIME=$REMAINING_TIME
-            fi
-
-            echo "Segment BACKUP $i -> $FILE (czas trwania: ${CHUNK_TIME}s)"
-
-            ffmpeg \
-              -y \
-              -loglevel error \
+          while [ "$(date +%s)" -lt "$END" ]; do
+            REM=$((END-$(date +%s)))
+            [ "$REM" -le 5 ] && break
+            CHUNK=1800
+            [ "$REM" -lt 1800 ] && CHUNK=$REM
+            
+            ffmpeg -y -loglevel error \
               -user_agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64)" \
               -reconnect 1 \
               -reconnect_streamed 1 \
+              -reconnect_at_eof 1 \
+              -reconnect_on_network_error 1 \
               -reconnect_delay_max 5 \
-              -i "$STREAM" \
-              -t "$CHUNK_TIME" \
-              -c:a copy \
-              "$FILE" || echo "Stream interrupted, re-connecting..."
-
-            sleep "$((RANDOM % 5 + 2))"
+              -i "$STREAM" -t "$CHUNK" -c:a copy \
+              "nagrania_backup/Radio_$(date +%F_%H-%M-%S)_BACKUP.mp3" || true
+            
+            sleep $((RANDOM%5+2))
           done
-
-          echo "RECORDING BACKUP DONE"
 
       - name: Upload Backup to MEGA
         env:
@@ -258,12 +199,11 @@ jobs:
           set -euo pipefail
           mega-login "$MEGA_EMAIL" "$MEGA_PASSWORD" > /dev/null
           mega-mkdir /Radio_Nagrania || true
-
           shopt -s nullglob
           for file in nagrania_backup/*.mp3; do
             if [ -f "$file" ]; then
               echo "Uploading Backup: $file..."
-              mega-put "$file" /Radio_Nagrania/ > /dev/null || echo "Upload failed for $file, skipping to next."
+              mega-put "$file" /Radio_Nagrania/ > /dev/null || echo "Upload failed for $file, skipping."
             fi
           done
           mega-logout > /dev/null
