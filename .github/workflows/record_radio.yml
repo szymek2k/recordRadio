@@ -9,17 +9,17 @@ on:
     - cron: '50 14 * * 1'
     - cron: '50 17 * * 1'
     - cron: '50 20 * * 1'
-    - cron: '50 12 * * 0' # Wyjątek niedzielny
   workflow_dispatch:
 
-concurrency:
-  group: radio-logger
-  cancel-in-progress: false
-
 jobs:
+  # =========================================================================
+  # 1. PROCES GŁÓWNY (Działa od razu przez 3 godziny, tnie pliki co 30 minut)
+  # =========================================================================
   record:
     runs-on: ubuntu-latest
     timeout-minutes: 240
+    concurrency:
+      group: radio-logger-main-${{ github.run_id }}
 
     steps:
       - name: Checkout
@@ -30,27 +30,15 @@ jobs:
           set -euo pipefail
           sudo apt-get update -qq
           sudo apt-get install -y -qq ffmpeg wget
-
           sudo wget -q -O /var/tmp/megacmd.deb https://mega.nz/linux/repo/xUbuntu_22.04/amd64/megacmd-xUbuntu_22.04_amd64.deb
           sudo apt-get install -y -qq /var/tmp/megacmd.deb
 
-      - name: Smart recorder (PROPER LOGIC)
+      - name: Smart recorder (MAIN PROCESS)
         run: |
           set -euo pipefail
           export TZ="Europe/Warsaw"
 
-          DAY=$(date +"%u")
-          HOUR=$(date +"%H")
-
-          DURATION=10800 # Standardowo 3 godziny
-          
-          # FIX 1: Poprawna logika niedzielnego wyjątku (tylko w godzinach popołudniowych)
-          # Cron '50 12' odpala się o 14:50 czasu polskiego. Sprawdzamy bezpieczny przedział godzinowy.
-          if [ "$DAY" = "7" ] && [ "$HOUR" -le 15 ]; then
-            echo "Wykryto okno dla audycji niedzielnej (krótkiej)."
-            DURATION=300
-          fi
-
+          DURATION=10800 # 3 godziny
           mkdir -p nagrania
           STREAM="https://sluchaj2.radiopark.biz.pl:8443/stream"
 
@@ -62,7 +50,6 @@ jobs:
             CURRENT_TIME=$(date +%s)
             REMAINING_TIME=$((END_TIME - CURRENT_TIME))
 
-            # Jeśli zostało mniej niż 5 sekund, kończymy pętlę
             if [ "$REMAINING_TIME" -le 5 ]; then
               break
             fi
@@ -71,16 +58,13 @@ jobs:
             TIMESTAMP=$(date +"%Y-%m-%d_%H-%M-%S")
             FILE="nagrania/Radio_${TIMESTAMP}.mp3"
 
-            # FIX 2: Ustalamy czas trwania segmentu: maksymalnie 1800s, 
-            # ale jeśli do końca bloku zostało mniej (np. 300s), bierzemy REMAINING_TIME
             CHUNK_TIME=1800
             if [ "$REMAINING_TIME" -lt 1800 ]; then
               CHUNK_TIME=$REMAINING_TIME
             fi
 
-            echo "Segment $i -> $FILE (czas trwania: ${CHUNK_TIME}s)"
+            echo "Segment MAIN $i -> $FILE (czas trwania: ${CHUNK_TIME}s)"
 
-            # Przywrócono -c:a copy dla 0% zużycia CPU i oryginalnej jakości
             ffmpeg \
               -y \
               -loglevel error \
@@ -96,26 +80,150 @@ jobs:
             sleep $((RANDOM % 5 + 2))
           done
 
-          echo "RECORDING DONE"
+          echo "RECORDING MAIN DONE"
 
-      - name: Upload to MEGA (FIXED per file)
+      - name: Upload Main to MEGA
         env:
           MEGA_EMAIL: ${{ secrets.MEGA_EMAIL }}
           MEGA_PASSWORD: ${{ secrets.MEGA_PASSWORD }}
         run: |
           set -euo pipefail
-
           mega-login "$MEGA_EMAIL" "$MEGA_PASSWORD" > /dev/null
           mega-mkdir /Radio_Nagrania || true
-
-          # Zabezpieczenie przed błędem, gdyby katalog był pusty
-          shopt -s nullglob
           
+          shopt -s nullglob
           for file in nagrania/*.mp3; do
             if [ -f "$file" ]; then
               echo "Uploading $file..."
               mega-put "$file" /Radio_Nagrania/ > /dev/null || echo "Upload failed for $file, skipping to next."
             fi
           done
+          mega-logout > /dev/null
 
+  # =========================================================================
+  # 2. PROCES ZABEZPIECZAJĄCY (Inteligentny dynamiczny sleep + segmentacja)
+  # =========================================================================
+  backup-record:
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    concurrency:
+      group: radio-logger-backup-${{ github.run_id }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq ffmpeg wget
+          sudo wget -q -O /var/tmp/megacmd.deb https://mega.nz/linux/repo/xUbuntu_22.04/amd64/megacmd-xUbuntu_22.04_amd64.deb
+          sudo apt-get install -y -qq /var/tmp/megacmd.deb
+
+      - name: Wait for backup window and record (BACKUP PROCESS)
+        run: |
+          set -euo pipefail
+          export TZ="Europe/Warsaw"
+
+          CURRENT_SECS=$(date +%s)
+          
+          # Definiujemy planowane godziny startu cronów w minutach od północy (czas PL)
+          # 13:50->830, 14:50->890, 16:50->1010, 17:50->1070, 19:50->1190, 20:50->1250, 22:50->1370
+          PLANNED_MINUTES=(830 890 1010 1070 1190 1250 1370)
+          
+          CURR_H=$(date +"%H")
+          CURR_M=$(date +"%M")
+          NOW_IN_MINS=$(( 10#$CURR_H * 60 + 10#$CURR_M ))
+
+          BEST_MATCH=${PLANNED_MINUTES[0]}
+          MIN_DIFF=9999
+
+          for item in "${PLANNED_MINUTES[@]}"; do
+            DIFF=$(( NOW_IN_MINS - item ))
+            # Szukamy crona, który planowo miał ruszyć nie dawniej niż 120 minut temu
+            if [ "$DIFF" -ge 0 ] && [ "$DIFF" -lt "$MIN_DIFF" ] && [ "$DIFF" -lt 120 ]; then
+              MIN_DIFF=$DIFF
+              BEST_MATCH=$item
+            fi
+          done
+
+          # Obliczamy docelowy czas startu backupu (zawsze dokładnie 140 minut po PLANOWANYM cronie)
+          START_OF_DAY_SECS=$(date -d "00:00:00" +%s)
+          TARGET_START_SECS=$(( START_OF_DAY_SECS + (BEST_MATCH * 60) + 8400 ))
+
+          # Dynamiczny obliczony sleep
+          SLEEP_SECS=$(( TARGET_START_SECS - CURRENT_SECS ))
+
+          if [ "$SLEEP_SECS" -gt 0 ]; then
+            echo "Wykryto planowany cron o godzinie $((BEST_MATCH / 60)):$((BEST_MATCH % 60))"
+            echo "GitHub opóźnił start o: $(( MIN_DIFF )) min."
+            echo "Czekam dynamicznie przez ${SLEEP_SECS} sekund..."
+            sleep "$SLEEP_SECS"
+          else
+            echo "Opóźnienie GitHuba przekroczyło okno zakładki ($(( MIN_DIFF )) min). Start natychmiastowy!"
+          fi
+
+          # Rozpoczęcie nagrywania z podziałem na części
+          DURATION=4800 # 1 godzina 20 minut
+          mkdir -p nagrania_backup
+          STREAM="https://sluchaj2.radiopark.biz.pl:8443/stream"
+
+          START_TIME=$(date +%s)
+          END_TIME=$((START_TIME + DURATION))
+          i=0
+
+          while [ "$(date +%s)" -lt "$END_TIME" ]; do
+            CURRENT_TIME=$(date +%s)
+            REMAINING_TIME=$((END_TIME - CURRENT_TIME))
+
+            if [ "$REMAINING_TIME" -le 5 ]; then
+              break
+            fi
+
+            i=$((i+1))
+            TIMESTAMP=$(date +"%Y-%m-%d_%H-%M-%S")
+            # Adnotacja _BACKUP w nazwie pliku
+            FILE="nagrania_backup/Radio_${TIMESTAMP}_BACKUP.mp3"
+
+            CHUNK_TIME=1800
+            if [ "$REMAINING_TIME" -lt 1800 ]; then
+              CHUNK_TIME=$REMAINING_TIME
+            fi
+
+            echo "Segment BACKUP $i -> $FILE (czas trwania: ${CHUNK_TIME}s)"
+
+            ffmpeg \
+              -y \
+              -loglevel error \
+              -user_agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64)" \
+              -reconnect 1 \
+              -reconnect_streamed 1 \
+              -reconnect_delay_max 5 \
+              -i "$STREAM" \
+              -t "$CHUNK_TIME" \
+              -c:a copy \
+              "$FILE" || echo "Stream interrupted, re-connecting..."
+
+            sleep $((RANDOM % 5 + 2))
+          done
+
+          echo "RECORDING BACKUP DONE"
+
+      - name: Upload Backup to MEGA
+        env:
+          MEGA_EMAIL: ${{ secrets.MEGA_EMAIL }}
+          MEGA_PASSWORD: ${{ secrets.MEGA_PASSWORD }}
+        run: |
+          set -euo pipefail
+          mega-login "$MEGA_EMAIL" "$MEGA_PASSWORD" > /dev/null
+          mega-mkdir /Radio_Nagrania || true
+
+          shopt -s nullglob
+          for file in nagrania_backup/*.mp3; do
+            if [ -f "$file" ]; then
+              echo "Uploading Backup: $file..."
+              mega-put "$file" /Radio_Nagrania/ > /dev/null || echo "Upload failed for $file, skipping to next."
+            fi
+          done
           mega-logout > /dev/null
