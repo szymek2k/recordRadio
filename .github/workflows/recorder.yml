@@ -10,7 +10,7 @@ on:
     # Poniedziałki
     - cron: '50 14 * * 1'
     - cron: '50 17 * * 1'
-    - cron: '50 20 * * 1'
+    - cron: '35 20 * * 1'
   workflow_dispatch:
 
 jobs:
