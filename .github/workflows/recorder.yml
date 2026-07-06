@@ -2,12 +2,12 @@ name: 🎙️ Radio Park FM - MAIN RECORDER
 
 on:
   schedule:
-    # Piątki, Soboty i Niedziele (5,6,0)
+    # Piątki, Soboty i Niedziele (5,6,0 w składni crona GitHub Actions, gdzie 0 = Niedziela)
     - cron: '50 13 * * 5,6,0'
     - cron: '50 16 * * 5,6,0'
     - cron: '50 19 * * 5,6,0'
     - cron: '50 22 * * 5,6,0'
-    # Poniedziałki (1)
+    # Poniedziałki
     - cron: '50 14 * * 1'
     - cron: '50 17 * * 1'
     - cron: '50 20 * * 1'
@@ -24,18 +24,18 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Sprawdź harmonogram
+      - name: Sprawdź harmonogram i kolejkę
         run: |
           chmod +x scheduler/check_queue.sh
           ./scheduler/check_queue.sh
 
-      - name: Aktualizacja kolejki w repozytorium
-        if: env.START_RECORDING == 'true'
+      - name: Aktualizacja kolejki w repozytorium (tylko dla zadań z formularza)
+        if: env.START_RECORDING == 'true' && env.NEED_REPO_COMMIT == 'true'
         run: |
           git config --global user.name "GitHub Actions Bot"
           git config --global user.email "actions@github.com"
           git add scheduler/queue.json
-          git commit -m "🚀 Uruchomiono proces nagrywania. Czyszczenie kolejki."
+          git commit -m "🚀 Uruchomiono nagranie z formularza. Czyszczenie kolejki."
           git push
 
       - name: Install dependencies
@@ -58,7 +58,6 @@ jobs:
           mkdir -p nagrania
           STREAM="https://sluchaj2.radiopark.biz.pl:8443/stream"
           
-          # Pobieramy dynamiczny czas z kolejki przekazany przez skrypt
           DURATION_SECS=${{ env.REC_DURATION }}
           END=$(( $(date +%s) + DURATION_SECS ))
           
@@ -102,8 +101,7 @@ jobs:
           done
           mega-logout > /dev/null
 
-      # Wywołujemy Backup za pomocą GitHub API na 2h 20 min (8400 sekund) po rozpoczęciu
-      - name: Wywołaj Backup Workflow (Zasada braku marnowania zasobów)
+      - name: Wywołaj Backup Workflow
         if: env.START_RECORDING == 'true' && env.REC_BACKUP == 'true'
         run: |
           echo "Wysyłam żądanie API o uruchomienie niezależnego procesu Backup..."
