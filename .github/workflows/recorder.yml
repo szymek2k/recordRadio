@@ -2,7 +2,7 @@ name: 🎙️ Radio Park FM - MAIN RECORDER
 
 on:
   schedule:
-    # 🎯 NOWOŚĆ: Uniwersalny strażnik - sprawdza kolejkę z formularza co 30 minut przez całą dobę
+    # 🎯 Uniwersalny strażnik - sprawdza kolejkę z formularza co 30 minut przez całą dobę
     - cron: '0,30 * * * *'
 
     # Stały grafik audycji (wybudzenia 10 minut przed czasem)
@@ -74,31 +74,31 @@ jobs:
           echo "------------------------------------------------------------------"
           
           while [ "$(date +%s)" -lt "$END" ]; do
-          REM=$((END-$(date +%s)))
-          [ "$REM" -le 5 ] && break
-          CHUNK=1800
-          [ "$REM" -lt 1800 ] && CHUNK=$REM
-          
-          # Wypisujemy w logach informację o bieżącym pliku
-          echo "🎙️ [$(date '+%H:%M:%S')] Rozpoczynam nagrywanie segmentu nr $SEGMENT_COUNTER z $TOTAL_SEGMENTS..."
-          
-          ffmpeg -y -loglevel error \
-           -user_agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64)" \
-           -reconnect 1 \
-           -reconnect_streamed 1 \
-           -reconnect_at_eof 1 \
-           -reconnect_on_network_error 1 \
-           -reconnect_delay_max 5 \
-           -i "$STREAM" -t "$CHUNK" -c:a copy \
-           "nagrania/Radio_$(date +%F_%H-%M-%S).mp3" || true
-          
-          echo "💾 [$(date '+%H:%M:%S')] Zakończono segment nr $SEGMENT_COUNTER."
-          echo "------------------------------------------------------------------"
-          
-          SEGMENT_COUNTER=$((SEGMENT_COUNTER + 1))
-          sleep $((RANDOM%5+2))
+            REM=$((END-$(date +%s)))
+            [ "$REM" -le 5 ] && break
+            CHUNK=1800
+            [ "$REM" -lt 1800 ] && CHUNK=$REM
+            
+            # Wypisujemy w logach informację o bieżącym pliku
+            echo "🎙️ [$(date '+%H:%M:%S')] Rozpoczynam nagrywanie segmentu nr $SEGMENT_COUNTER z $TOTAL_SEGMENTS..."
+            
+            ffmpeg -y -loglevel error \
+              -user_agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64)" \
+              -reconnect 1 \
+              -reconnect_streamed 1 \
+              -reconnect_at_eof 1 \
+              -reconnect_on_network_error 1 \
+              -reconnect_delay_max 5 \
+              -i "$STREAM" -t "$CHUNK" -c:a copy \
+              "nagrania/Radio_$(date +%F_%H-%M-%S).mp3" || true
+            
+            echo "💾 [$(date '+%H:%M:%S')] Zakończono segment nr $SEGMENT_COUNTER."
+            echo "------------------------------------------------------------------"
+            
+            SEGMENT_COUNTER=$((SEGMENT_COUNTER + 1))
+            sleep $((RANDOM%5+2))
           done
-          echo "✅ Wszystkie segmenty zostały pomyślnie zapisane lokalnie."     
+          echo "✅ Wszystkie segmenty zostały pomyślnie zapisane lokalnie."
 
       - name: Upload Main to MEGA
         if: env.START_RECORDING == 'true' && env.REC_MEGA == 'true'
