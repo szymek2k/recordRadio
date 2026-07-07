@@ -60,18 +60,31 @@ IS_CRON_MATCH=false
 
 # Zmiana: Szerokie okna czasowe (do XX:31) zabezpieczające przed lagami GitHuba
 case "$DAY_OF_WEEK" in
-  5|6|7) # Piątek, Sobota, Niedziela
-    if [[ "$HHMM" > "13:44" && "$HHMM" < "14:31" ]] || \
-       [[ "$HHMM" > "16:44" && "$HHMM" < "17:31" ]] || \
-       [[ "$HHMM" > "19:44" && "$HHMM" < "20:31" ]] || \
-       [[ "$HHMM" > "22:44" && "$HHMM" < "23:31" ]]; then
+  2) # 🧪 Wtorek (WPIS TESTOWY)
+    if [[ "$HHMM" > "16:09" && "$HHMM" < "16:31" ]]; then
+       IS_CRON_MATCH=true
+    fi
+    ;;
+  5) # Piątek
+    if [[ "$HHMM" > "15:44" && "$HHMM" < "16:31" ]] || \
+       [[ "$HHMM" > "18:44" && "$HHMM" < "19:31" ]] || \
+       [[ "$HHMM" > "21:44" && "$HHMM" < "22:31" ]]; then
+       IS_CRON_MATCH=true
+    fi
+    ;;
+  6|7) # Sobota, Niedziela
+    if [[ "$HHMM" > "00:44" && "$HHMM" < "01:31" ]] || \
+       [[ "$HHMM" > "15:44" && "$HHMM" < "16:31" ]] || \
+       [[ "$HHMM" > "18:44" && "$HHMM" < "19:31" ]] || \
+       [[ "$HHMM" > "21:44" && "$HHMM" < "22:31" ]]; then
        IS_CRON_MATCH=true
     fi
     ;;
   1) # Poniedziałek
-    if [[ "$HHMM" > "14:44" && "$HHMM" < "15:31" ]] || \
+    if [[ "$HHMM" > "00:44" && "$HHMM" < "01:31" ]] || \
        [[ "$HHMM" > "17:44" && "$HHMM" < "18:31" ]] || \
-       [[ "$HHMM" > "20:44" && "$HHMM" < "21:31" ]]; then
+       [[ "$HHMM" > "20:44" && "$HHMM" < "21:31" ]] || \
+       [[ "$HHMM" > "23:44" && "$HHMM" < "23:59" ]]; then
        IS_CRON_MATCH=true
     fi
     ;;
