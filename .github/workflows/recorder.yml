@@ -1,87 +1,81 @@
-name: 🎙️ Radio Park FM - MAIN RECORDER
+name: Radio Park FM - ULTIMATE LOGGER (CLEAN)
 
 on:
-  workflow_dispatch: # Wyzwalacz, którego użyje cron-job.org oraz ty ręcznie w razie potrzeby
+  workflow_dispatch: # Uruchamiane natychmiast i precyzyjnie przez cron-job.org
 
 jobs:
-  check-and-record:
+  # =========================================================================
+  # PROCES GŁÓWNY (Działa od razu przez 3 godziny, tnie pliki co 30 minut)
+  # =========================================================================
+  record:
     runs-on: ubuntu-latest
     timeout-minutes: 240
     concurrency:
-      group: radio-logger-main
-      cancel-in-progress: false
+      group: radio-logger-main-${{ github.run_id }}
 
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Sprawdz harmonogram i kolejke
-        run: |
-          chmod +x scheduler/check_queue.sh
-          ./scheduler/check_queue.sh
-
-      - name: Aktualizacja kolejki w repozytorium
-        if: env['START_RECORDING'] == 'true' && env['NEED_REPO_COMMIT'] == 'true'
-        run: |
-          git config --global user.name "GitHub Actions Bot"
-          git config --global user.email "actions@github.com"
-          git add scheduler/queue.json
-          git commit -m "Uruchomiono nagranie z formularza. Czyszczenie kolejki."
-          git push
+      - name: Checkout
+        uses: actions/checkout@v4
 
       - name: Install dependencies
-        if: env['START_RECORDING'] == 'true'
         run: |
           set -euo pipefail
           sudo apt-get update -qq
-          sudo apt-get install -y -qq ffmpeg wget lsb-release jq
-          UBUNTU=$(lsb_release -rs)
-          wget -q -O /tmp/megacmd.deb https://mega.nz/linux/repo/xUbuntu_${UBUNTU}/amd64/megacmd-xUbuntu_${UBUNTU}_amd64.deb \
-            || wget -q -O /tmp/megacmd.deb https://mega.nz/linux/repo/xUbuntu_22.04/amd64/megacmd-xUbuntu_22.04_amd64.deb
-          sudo apt-get install -y -qq /tmp/megacmd.deb
+          sudo apt-get install -y -qq ffmpeg wget
+          sudo wget -q -O /var/tmp/megacmd.deb https://mega.nz/linux/repo/xUbuntu_22.04/amd64/megacmd-xUbuntu_22.04_amd64.deb
+          sudo apt-get install -y -qq /var/tmp/megacmd.deb
 
-      - name: Recorder (MAIN PROCESS)
-        if: env['START_RECORDING'] == 'true'
+      - name: Smart recorder (MAIN PROCESS)
         run: |
           set -euo pipefail
-          export TZ=Europe/Warsaw
-          
+          export TZ="Europe/Warsaw"
+
+          DURATION=10800 # 3 godziny
           mkdir -p nagrania
           STREAM="https://sluchaj2.radiopark.biz.pl:8443/stream"
-          
-          DURATION_SECS=${{ env.REC_DURATION }}
-          END=$(( $(date +%s) + DURATION_SECS ))
-          
-          TOTAL_SEGMENTS=$(( (DURATION_SECS + 1799) / 1800 ))
-          SEGMENT_COUNTER=1
-          
-          echo "[MAIN] Rozpoczynam rejestracje strumienia..."
-          
-          while [ "$(date +%s)" -lt "$END" ]; do
-            REM=$((END-$(date +%s)))
-            [ "$REM" -le 5 ] && break
-            CHUNK=1800
-            [ "$REM" -lt 1800 ] && CHUNK=$REM
-            
-            echo "Rozpoczynam nagrywanie segmentu nr $SEGMENT_COUNTER z $TOTAL_SEGMENTS..."
-            
-            ffmpeg -y -loglevel error \
+
+          START_TIME=$(date +%s)
+          END_TIME=$((START_TIME + DURATION))
+          i=0
+
+          while [ "$(date +%s)" -lt "$END_TIME" ]; do
+            CURRENT_TIME=$(date +%s)
+            REMAINING_TIME=$((END_TIME - CURRENT_TIME))
+
+            if [ "$REMAINING_TIME" -le 5 ]; then
+              break
+            fi
+
+            i=$((i+1))
+            TIMESTAMP=$(date +"%Y-%m-%d_%H-%M-%S")
+            FILE="nagrania/Radio_${TIMESTAMP}.mp3"
+
+            CHUNK_TIME=1800
+            if [ "$REMAINING_TIME" -lt 1800 ]; then
+              CHUNK_TIME=$REMAINING_TIME
+            fi
+
+            # Twoje poprawione logowanie:
+            echo "Segment MAIN $i -> $FILE (czas trwania: ${CHUNK_TIME}s)"
+
+            ffmpeg \
+              -y \
+              -loglevel error \
               -user_agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64)" \
               -reconnect 1 \
               -reconnect_streamed 1 \
-              -reconnect_at_eof 1 \
-              -reconnect_on_network_error 1 \
               -reconnect_delay_max 5 \
-              -i "$STREAM" -t "$CHUNK" -c:a copy \
-              "nagrania/Radio_$(date +%F_%H-%M-%S).mp3" || true
-            
-            echo "Zakonczono segment nr $SEGMENT_COUNTER."
-            
-            SEGMENT_COUNTER=$((SEGMENT_COUNTER + 1))
-            sleep $((RANDOM%5+2))
+              -i "$STREAM" \
+              -t "$CHUNK_TIME" \
+              -c:a copy \
+              "$FILE" || echo "Stream interrupted, re-connecting..."
+
+            sleep $((RANDOM % 5 + 2))
           done
 
+          echo "RECORDING MAIN DONE"
+
       - name: Upload Main to MEGA
-        if: env['START_RECORDING'] == 'true' && env['REC_MEGA'] == 'true'
         env:
           MEGA_EMAIL: ${{ secrets.MEGA_EMAIL }}
           MEGA_PASSWORD: ${{ secrets.MEGA_PASSWORD }}
@@ -89,22 +83,12 @@ jobs:
           set -euo pipefail
           mega-login "$MEGA_EMAIL" "$MEGA_PASSWORD" > /dev/null
           mega-mkdir /Radio_Nagrania || true
-
+          
           shopt -s nullglob
           for file in nagrania/*.mp3; do
             if [ -f "$file" ]; then
               echo "Uploading $file..."
-              mega-put "$file" /Radio_Nagrania/ > /dev/null || echo "Upload failed for $file, skipping."
+              mega-put "$file" /Radio_Nagrania/ > /dev/null || echo "Upload failed for $file, skipping to next."
             fi
           done
           mega-logout > /dev/null
-
-      - name: Wywolaj Backup Workflow
-        if: env['START_RECORDING'] == 'true' && env['REC_BACKUP'] == 'true'
-        run: |
-          echo "Wysylam zadanie API..."
-          curl -X POST \
-            -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
-            -H "Accept: application/vnd.github.v3+json" \
-            https://api.github.com/repos/${{ github.repository }}/actions/workflows/backup.yml/dispatches \
-            -d '{"ref":"main"}'
