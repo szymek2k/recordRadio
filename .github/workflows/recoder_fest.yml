@@ -1,0 +1,94 @@
+name: Radio Fest FM - ULTIMATE LOGGER (CLEAN)
+
+on:
+  workflow_dispatch: # Uruchamiane natychmiast i precyzyjnie przez cron-job.org
+
+jobs:
+  # =========================================================================
+  # PROCES GŁÓWNY (Działa od razu przez 3 godziny, tnie pliki co 30 minut)
+  # =========================================================================
+  record:
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    concurrency:
+      group: radio-logger-main-${{ github.run_id }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq ffmpeg wget
+          sudo wget -q -O /var/tmp/megacmd.deb https://mega.nz/linux/repo/xUbuntu_22.04/amd64/megacmd-xUbuntu_22.04_amd64.deb
+          sudo apt-get install -y -qq /var/tmp/megacmd.deb
+
+      - name: Smart recorder (MAIN PROCESS)
+        run: |
+          set -euo pipefail
+          export TZ="Europe/Warsaw"
+
+          DURATION=10800 # 3 godziny
+          mkdir -p nagrania
+          STREAM="https://play.radiofest.pl:8443/fest"
+
+          START_TIME=$(date +%s)
+          END_TIME=$((START_TIME + DURATION))
+          i=0
+
+          while [ "$(date +%s)" -lt "$END_TIME" ]; do
+            CURRENT_TIME=$(date +%s)
+            REMAINING_TIME=$((END_TIME - CURRENT_TIME))
+
+            if [ "$REMAINING_TIME" -le 5 ]; then
+              break
+            fi
+
+            i=$((i+1))
+            TIMESTAMP=$(date +"%Y-%m-%d_%H-%M-%S")
+            FILE="nagrania/Radio_Fest_${TIMESTAMP}.mp3"
+
+            CHUNK_TIME=1800
+            if [ "$REMAINING_TIME" -lt 1800 ]; then
+              CHUNK_TIME=$REMAINING_TIME
+            fi
+
+            # Twoje poprawione logowanie:
+            echo "Segment MAIN $i -> $FILE (czas trwania: ${CHUNK_TIME}s)"
+
+            ffmpeg \
+              -y \
+              -loglevel error \
+              -user_agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64)" \
+              -reconnect 1 \
+              -reconnect_streamed 1 \
+              -reconnect_delay_max 5 \
+              -i "$STREAM" \
+              -t "$CHUNK_TIME" \
+              -c:a copy \
+              "$FILE" || echo "Stream interrupted, re-connecting..."
+
+            sleep $((RANDOM % 5 + 2))
+          done
+
+          echo "RECORDING MAIN DONE"
+
+      - name: Upload Main to MEGA
+        env:
+          MEGA_EMAIL: ${{ secrets.MEGA_EMAIL }}
+          MEGA_PASSWORD: ${{ secrets.MEGA_PASSWORD }}
+        run: |
+          set -euo pipefail
+          mega-login "$MEGA_EMAIL" "$MEGA_PASSWORD" > /dev/null
+          mega-mkdir /Radio_Fest_Nagrania || true
+          
+          shopt -s nullglob
+          for file in nagrania/*.mp3; do
+            if [ -f "$file" ]; then
+              echo "Uploading $file..."
+              mega-put "$file" /Radio_Fest_Nagrania/ > /dev/null || echo "Upload failed for $file, skipping to next."
+            fi
+          done
+          mega-logout > /dev/null
