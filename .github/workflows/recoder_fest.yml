@@ -1,12 +1,18 @@
-name: Radio Fest FM - ULTIMATE LOGGER (CLEAN)
+name: Radio Fest FM - ULTIMATE LOGGER (DYNAMIC)
 
 on:
-  workflow_dispatch: # Uruchamiane natychmiast i precyzyjnie przez cron-job.org
+  workflow_dispatch:
+    inputs:
+      duration:
+        description: 'Całkowity czas nagrywania (w sekundach)'
+        required: false
+        default: '10800' # 3 godziny domyślnie
+      chunk:
+        description: 'Długość jednego segmentu (w sekundach)'
+        required: false
+        default: '1800'  # 30 minut domyślnie
 
 jobs:
-  # =========================================================================
-  # PROCES GŁÓWNY (Działa od razu przez 3 godziny, tnie pliki co 30 minut)
-  # =========================================================================
   record:
     runs-on: ubuntu-latest
     timeout-minutes: 240
@@ -30,7 +36,13 @@ jobs:
           set -euo pipefail
           export TZ="Europe/Warsaw"
 
-          DURATION=10800 # 3 godziny
+          # Odbieranie parametrów z GitHub Actions (jeśli puste, weźmie domyślne)
+          DURATION="${{ github.event.inputs.duration }}"
+          [ -z "$DURATION" ] && DURATION=10800
+          
+          DEFAULT_CHUNK="${{ github.event.inputs.chunk }}"
+          [ -z "$DEFAULT_CHUNK" ] && DEFAULT_CHUNK=1800
+
           mkdir -p nagrania
           STREAM="https://play.radiofest.pl:8443/fest"
 
@@ -50,12 +62,12 @@ jobs:
             TIMESTAMP=$(date +"%Y-%m-%d_%H-%M-%S")
             FILE="nagrania/Radio_Fest_${TIMESTAMP}.mp3"
 
-            CHUNK_TIME=1800
-            if [ "$REMAINING_TIME" -lt 1800 ]; then
+            # Dynamiczne ustawianie długości segmentu
+            CHUNK_TIME=$DEFAULT_CHUNK
+            if [ "$REMAINING_TIME" -lt "$DEFAULT_CHUNK" ]; then
               CHUNK_TIME=$REMAINING_TIME
             fi
 
-            # Twoje poprawione logowanie:
             echo "Segment MAIN $i -> $FILE (czas trwania: ${CHUNK_TIME}s)"
 
             ffmpeg \
