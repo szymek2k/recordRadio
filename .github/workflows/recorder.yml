@@ -1,11 +1,20 @@
-name: Radio Park FM - ULTIMATE LOGGER (CLEAN)
+name: Radio Park FM - ULTIMATE LOGGER (DYNAMIC)
 
 on:
-  workflow_dispatch: # Uruchamiane natychmiast i precyzyjnie przez cron-job.org
+  workflow_dispatch:
+    inputs:
+      duration:
+        description: 'Całkowity czas nagrywania (w sekundach)'
+        required: false
+        default: '10800' # 3 godziny domyślnie
+      chunk:
+        description: 'Długość jednego segmentu (w sekundach)'
+        required: false
+        default: '1800'  # 30 minut domyślnie
 
 jobs:
   # =========================================================================
-  # PROCES GŁÓWNY (Działa od razu przez 3 godziny, tnie pliki co 30 minut)
+  # PROCES GŁÓWNY (Działa dynamicznie na bazie parametrów z body requestu)
   # =========================================================================
   record:
     runs-on: ubuntu-latest
@@ -30,7 +39,30 @@ jobs:
           set -euo pipefail
           export TZ="Europe/Warsaw"
 
-          DURATION=10800 # 3 godziny
+          # Odbieranie parametrów z GitHub Actions
+          DURATION="${{ github.event.inputs.duration }}"
+          [ -z "$DURATION" ] && DURATION=10800
+          
+          DEFAULT_CHUNK="${{ github.event.inputs.chunk }}"
+          [ -z "$DEFAULT_CHUNK" ] && DEFAULT_CHUNK=1800
+
+          # =========================================================================
+          # SEKCJA INFORMACYJNA (LOGOWANIE POCZĄTKU PRACY)
+          # =========================================================================
+          echo "========================================================="
+          echo "START LOGGING: $(date +'%Y-%m-%d %H:%M:%S')"
+          echo "Planowany czas pracy (sekundy): $DURATION s"
+          echo "Rozmiar pojedynczego segmentu: $DEFAULT_CHUNK s"
+          
+          # Przeliczanie sekund na czytelny format (godziny i minuty)
+          H=$((DURATION / 3600))
+          M=$(((DURATION % 3600) / 60))
+          CH_M=$((DEFAULT_CHUNK / 60))
+          
+          echo "Całkowity czas nagrywania: ${H}h ${M}m"
+          echo "Cięcie plików co: ${CH_M} minut(y)"
+          echo "========================================================="
+
           mkdir -p nagrania
           STREAM="https://sluchaj2.radiopark.biz.pl:8443/stream"
 
@@ -50,8 +82,9 @@ jobs:
             TIMESTAMP=$(date +"%Y-%m-%d_%H-%M-%S")
             FILE="nagrania/Radio_${TIMESTAMP}.mp3"
 
-            CHUNK_TIME=1800
-            if [ "$REMAINING_TIME" -lt 1800 ]; then
+            # Dynamiczne ustawianie długości segmentu
+            CHUNK_TIME=$DEFAULT_CHUNK
+            if [ "$REMAINING_TIME" -lt "$DEFAULT_CHUNK" ]; then
               CHUNK_TIME=$REMAINING_TIME
             fi
 
