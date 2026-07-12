@@ -6,21 +6,18 @@ on:
       duration:
         description: 'Całkowity czas nagrywania (w sekundach)'
         required: false
-        default: '10800' # 3 godziny domyślnie
+        default: '10800'
       chunk:
         description: 'Długość jednego segmentu (w sekundach)'
         required: false
-        default: '1800'  # 30 minut domyślnie
+        default: '1800'
 
 jobs:
-  # =========================================================================
-  # PROCES GŁÓWNY (Działa dynamicznie na bazie parametrów z body requestu)
-  # =========================================================================
   record:
     runs-on: ubuntu-latest
     timeout-minutes: 240
     concurrency:
-      group: radio-logger-main-${{ github.run_id }}
+      group: radio-park-logger-${{ github.run_id }}
 
     steps:
       - name: Checkout
@@ -38,90 +35,101 @@ jobs:
         run: |
           set -euo pipefail
           export TZ="Europe/Warsaw"
-
-          # Odbieranie parametrów z GitHub Actions
-          DURATION="${{ github.event.inputs.duration }}"
-          [ -z "$DURATION" ] && DURATION=10800
           
-          DEFAULT_CHUNK="${{ github.event.inputs.chunk }}"
-          [ -z "$DEFAULT_CHUNK" ] && DEFAULT_CHUNK=1800
-
-          # =========================================================================
-          # SEKCJA INFORMACYJNA (LOGOWANIE POCZĄTKU PRACY)
-          # =========================================================================
-          echo "========================================================="
-          echo "START LOGGING: $(date +'%Y-%m-%d %H:%M:%S')"
-          echo "Planowany czas pracy (sekundy): $DURATION s"
-          echo "Rozmiar pojedynczego segmentu: $DEFAULT_CHUNK s"
+          DURATION="${{ github.event.inputs.duration || '10800' }}"
+          DEFAULT_CHUNK="${{ github.event.inputs.chunk || '1800' }}"
           
-          # Przeliczanie sekund na czytelny format (godziny i minuty)
-          H=$((DURATION / 3600))
-          M=$(((DURATION % 3600) / 60))
-          CH_M=$((DEFAULT_CHUNK / 60))
-          
-          echo "Całkowity czas nagrywania: ${H}h ${M}m"
-          echo "Cięcie plików co: ${CH_M} minut(y)"
-          echo "========================================================="
-
           mkdir -p nagrania
+          mkdir -p logi
+          
           STREAM="https://sluchaj2.radiopark.biz.pl:8443/stream"
-
           START_TIME=$(date +%s)
           END_TIME=$((START_TIME + DURATION))
           i=0
 
           while [ "$(date +%s)" -lt "$END_TIME" ]; do
             CURRENT_TIME=$(date +%s)
-            REMAINING_TIME=$((END_TIME - CURRENT_TIME))
+            [ $((END_TIME - CURRENT_TIME)) -le 30 ] && break
 
-            if [ "$REMAINING_TIME" -le 5 ]; then
-              break
-            fi
-
-            i=$((i+1))
+            i=$((i + 1))
             TIMESTAMP=$(date +"%Y-%m-%d_%H-%M-%S")
             FILE="nagrania/Radio_${TIMESTAMP}.mp3"
+            LOG_FILE="logi/Log_MAIN_${i}_${TIMESTAMP}.txt"
 
-            # Dynamiczne ustawianie długości segmentu
-            CHUNK_TIME=$DEFAULT_CHUNK
-            if [ "$REMAINING_TIME" -lt "$DEFAULT_CHUNK" ]; then
-              CHUNK_TIME=$REMAINING_TIME
-            fi
+            REMAINING_TIME=$((END_TIME - CURRENT_TIME))
+            CHUNK_TIME=$(( REMAINING_TIME < DEFAULT_CHUNK ? REMAINING_TIME : DEFAULT_CHUNK ))
 
-            # Twoje poprawione logowanie:
-            echo "Segment MAIN $i -> $FILE (czas trwania: ${CHUNK_TIME}s)"
+            echo "Segment $i -> $FILE (czas: ${CHUNK_TIME}s)"
 
-            ffmpeg \
-              -y \
-              -loglevel error \
-              -user_agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64)" \
-              -reconnect 1 \
-              -reconnect_streamed 1 \
-              -reconnect_delay_max 5 \
-              -i "$STREAM" \
-              -t "$CHUNK_TIME" \
-              -c:a copy \
-              "$FILE" || echo "Stream interrupted, re-connecting..."
+            # Uruchomienie ffmpeg z limitem czasu -t
+            ffmpeg -y -hide_banner -loglevel warning -user_agent "Mozilla/5.0" \
+              -reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5 \
+              -i "$STREAM" -t "$CHUNK_TIME" -c:a copy "$FILE" >"$LOG_FILE" 2>&1 &
+          
+            FFMPEG_PID=$!
+            START_SEGMENT=$(date +%s)
+            LAST_SIZE=0
+            LAST_ACTIVE=$(date +%s)
+            TICK=0 
 
-            sleep $((RANDOM % 5 + 2))
+            while kill -0 "$FFMPEG_PID" 2>/dev/null; do
+              NOW=$(date +%s)
+          
+              if [ $((NOW - START_SEGMENT)) -ge "$CHUNK_TIME" ]; then
+                kill -SIGINT "$FFMPEG_PID" 2>/dev/null || true
+                break
+              fi
+
+              CURRENT_SIZE=$(stat -c%s "$FILE" 2>/dev/null || echo 0)
+          
+              if [ "$CURRENT_SIZE" -gt "$LAST_SIZE" ]; then
+                LAST_SIZE=$CURRENT_SIZE
+                LAST_ACTIVE="$NOW"
+                TICK=$((TICK + 1))
+                if [ $((TICK % 10)) -eq 0 ]; then
+                  echo "[$(date +'%H:%M:%S')] Nagrywanie w toku, segment $i (rozmiar: $CURRENT_SIZE B)" | tee -a "$LOG_FILE"
+                fi
+              elif [ $((NOW - LAST_ACTIVE)) -ge 180 ]; then
+                echo "[$(date +'%H:%M:%S')] Brak danych przez 3 min! Restart procesu..." | tee -a "$LOG_FILE"
+                kill -SIGINT "$FFMPEG_PID" 2>/dev/null || true
+                sleep 5
+                kill -9 "$FFMPEG_PID" 2>/dev/null || true
+                break
+              fi
+              sleep 30
+            done
+            wait "$FFMPEG_PID" 2>/dev/null || true
+            sleep 2
           done
 
-          echo "RECORDING MAIN DONE"
-
-      - name: Upload Main to MEGA
+      - name: Upload to MEGA
+        if: always()
         env:
           MEGA_EMAIL: ${{ secrets.MEGA_EMAIL }}
           MEGA_PASSWORD: ${{ secrets.MEGA_PASSWORD }}
         run: |
           set -euo pipefail
           mega-login "$MEGA_EMAIL" "$MEGA_PASSWORD" > /dev/null
-          mega-mkdir /Radio_Nagrania || true
           
-          shopt -s nullglob
-          for file in nagrania/*.mp3; do
-            if [ -f "$file" ]; then
-              echo "Uploading $file..."
-              mega-put "$file" /Radio_Nagrania/ > /dev/null || echo "Upload failed for $file, skipping to next."
-            fi
-          done
-          mega-logout > /dev/null
+          mega-mkdir /Radio_Nagrania || true
+          mega-mkdir /Radio_Nagrania/Radio_Logi || true
+          
+          if [ -d "nagrania" ]; then
+            for file in nagrania/*.mp3; do
+              if [ -f "$file" ] && [ "$(stat -c%s "$file")" -gt 50000 ]; then
+                echo "Uploading recording: $file..."
+                mega-put "$file" /Radio_Nagrania/ > /dev/null || echo "Błąd wysyłania: $file"
+              fi
+            done
+          fi
+          
+          if [ -d "logi" ]; then
+            for file in logi/*.txt; do
+              if [ -f "$file" ]; then
+                echo "Uploading log: $file..."
+                mega-put "$file" /Radio_Nagrania/Radio_Logi/ > /dev/null || echo "Błąd wysyłania: $file"
+              fi
+            done
+          fi
+          
+          mega-logout > /dev/null || true
