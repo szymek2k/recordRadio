@@ -89,7 +89,8 @@ jobs:
                 LAST_ACTIVE="$NOW"
                 TICK=$((TICK + 1))
                 if [ $((TICK % 10)) -eq 0 ]; then
-                  echo "[$(date +'%H:%M:%S')] Nagrywanie w toku, segment $i (rozmiar: $CURRENT_SIZE B)" | tee -a "$LOG_FILE"
+                  MBITS=$(( (CURRENT_SIZE * 8) / 1000000 ))
+                  echo "[$(date +'%H:%M:%S')] Nagrywanie w toku, segment $i (rozmiar: $MBITS Mb)" | tee -a "$LOG_FILE"
                 fi
               elif [ $((NOW - LAST_ACTIVE)) -ge 180 ]; then
                 echo "[$(date +'%H:%M:%S')] Brak danych przez 3 minuty. Restart procesu..." | tee -a "$LOG_FILE"
