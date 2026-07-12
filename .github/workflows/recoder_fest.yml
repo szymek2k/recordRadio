@@ -62,7 +62,7 @@ jobs:
             echo "Segment $i -> $FILE (czas: ${CHUNK_TIME}s)"
 
             # Uruchomienie ffmpeg z limitem czasu (-t)
-            ffmpeg -y -hide_banner -loglevel info -user_agent "Mozilla/5.0" \
+            ffmpeg -y -hide_banner -loglevel warning -user_agent "Mozilla/5.0" \
               -reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5 \
               -i "$STREAM" -t "$CHUNK_TIME" -c:a copy "$FILE" >"$LOG_FILE" 2>&1 &
 
