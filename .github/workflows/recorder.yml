@@ -93,7 +93,7 @@ jobs:
               elif [ $((NOW - LAST_ACTIVE)) -ge 180 ]; then
                 echo "[$(date +'%H:%M:%S')] Brak danych przez 3 min! Restart procesu..." | tee -a "$LOG_FILE"
                 kill -SIGINT "$FFMPEG_PID" 2>/dev/null || true
-                sleep 5
+                sleep 10
                 kill -9 "$FFMPEG_PID" 2>/dev/null || true
                 break
               fi
