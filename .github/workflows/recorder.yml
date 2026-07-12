@@ -31,6 +31,11 @@ jobs:
           sudo wget -q -O /var/tmp/megacmd.deb https://mega.nz/linux/repo/xUbuntu_22.04/amd64/megacmd-xUbuntu_22.04_amd64.deb
           sudo apt-get install -y -qq /var/tmp/megacmd.deb
 
+#      - name: Setup tmate session
+#        uses: mxschmitt/action-tmate@v3
+#        with:
+#          detached: true
+
       - name: Smart recorder (MAIN PROCESS)
         run: |
           set -euo pipefail
@@ -102,6 +107,16 @@ jobs:
             wait "$FFMPEG_PID" 2>/dev/null || true
             sleep 2
           done
+
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nagrania-tymczasowe
+          path: |
+            nagrania/
+            logi/    
+          retention-days: 2  # Artefakty zostaną usunięte automatycznie po 24 godzinach
 
       - name: Upload to MEGA
         if: always()
