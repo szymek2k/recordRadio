@@ -16,7 +16,6 @@ on:
         required: false
         default: '0'
 
-# Wymagane uprawnienia dla narzędzia GitHub CLI (gh), aby móc wywołać kolejny bieg workflow
 permissions:
   actions: write
   contents: read
@@ -56,21 +55,18 @@ jobs:
           LOG_TIMESTAMP=$(date +"%Y-%m-%d_%H-%M-%S")
           HISTORIA="logi/historia_dzialania_${LOG_TIMESTAMP}.log"
           
-          # Inicjalizacja zmiennej (zapobiega błędowi unbound variable przy set -u przed przypisaniem PID)
           FFMPEG_PID=""
 
-          # --- SYSTEMOWY PAS BEZPIECZEŃSTWA (TRAP) --- [Zastosowano Sugestię 1]
-          # Przechwytuje nagłe anulowanie/ubicie skryptu i kulturalnie zamyka ffmpeg w tym samym jobie
+          # --- SYSTEMOWY PAS BEZPIECZEŃSTWA (TRAP) ---
           trap 'if [ -n "$FFMPEG_PID" ]; then kill -SIGINT "$FFMPEG_PID" 2>/dev/null || true; wait "$FFMPEG_PID" 2>/dev/null || true; fi' EXIT TERM INT
           
-          echo "=== START WORKFLOW: $(date '+%Y-%m-%d %H:%M:%S') ===" > "$HISTORIA"
-          echo "Bieżący numer próby (retry_count): ${{ github.event.inputs.retry_count || '0' }}" >> "$HISTORIA" 2>&1
+          echo "=== START WORKFLOW: $(date '+%Y-%m-%d %H:%M:%S') ===" | tee "$HISTORIA"
+          echo "Bieżący numer próby (retry_count): ${{ github.event.inputs.retry_count || '0' }}" | tee -a "$HISTORIA"
           
-          # Logowanie do MEGA z zapisem wyniku do pliku historii
-          echo "[$(date +'%H:%M:%S')] Próba logowania do MEGA..." >> "$HISTORIA" 2>&1
-          ensure_mega_login
-          mega-mkdir /Radio_Nagrania >> "$HISTORIA" 2>&1 || true
-          mega-mkdir /Radio_Nagrania/Radio_Logi >> "$HISTORIA" 2>&1 || true
+          echo "[$(date +'%H:%M:%S')] Próba logowania do MEGA..." | tee -a "$HISTORIA"
+          ensure_mega_login 2>&1 | tee -a "$HISTORIA"
+          mega-mkdir /Radio_Nagrania 2>&1 | tee -a "$HISTORIA" || true
+          mega-mkdir /Radio_Nagrania/Radio_Logi 2>&1 | tee -a "$HISTORIA" || true
           
           DURATION="${{ github.event.inputs.duration || '10800' }}"
           DEFAULT_CHUNK="${{ github.event.inputs.chunk || '1800' }}"
@@ -92,9 +88,8 @@ jobs:
             REMAINING_TIME=$((END_TIME - CURRENT_TIME))
             CHUNK_TIME=$(( REMAINING_TIME < DEFAULT_CHUNK ? REMAINING_TIME : DEFAULT_CHUNK ))
 
-            echo "[$(date +'%H:%M:%S')] Rozpoczynanie segmentu $i (max: ${CHUNK_TIME}s) -> $FILE" >> "$HISTORIA" 2>&1
+            echo "[$(date +'%H:%M:%S')] Rozpoczynanie segmentu $i (max: ${CHUNK_TIME}s) -> $FILE" | tee -a "$LOG_FILE" "$HISTORIA"
 
-            # Uruchomienie ffmpeg z zapisem logów i błędów (2>&1) do dedykowanego pliku segmentu
             ffmpeg -y -hide_banner -loglevel warning -user_agent "Mozilla/5.0" \
               -reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5 \
               -i "$STREAM" -t "$CHUNK_TIME" -c:a copy "$FILE" >"$LOG_FILE" 2>&1 &
@@ -121,10 +116,10 @@ jobs:
                 TICK=$((TICK + 1))
                 if [ $((TICK % 10)) -eq 0 ]; then
                   MBS=$(( CURRENT_SIZE / 1048576 ))
-                  echo "[$(date +'%H:%M:%S')] Nagrywanie w toku, segment $i (rozmiar: $MBS MB)" | tee -a "$LOG_FILE" >> "$HISTORIA" 2>&1
+                  echo "[$(date +'%H:%M:%S')] Nagrywanie w toku, segment $i (rozmiar: $MBS MB)" | tee -a "$LOG_FILE" "$HISTORIA"
                 fi
               elif [ $((NOW - LAST_ACTIVE)) -ge 180 ]; then
-                echo "[$(date +'%H:%M:%S')] Brak danych przez 3 min! Restart procesu..." | tee -a "$LOG_FILE" >> "$HISTORIA" 2>&1
+                echo "[$(date +'%H:%M:%S')] Brak danych przez 3 min! Restart procesu..." | tee -a "$LOG_FILE" "$HISTORIA"
                 kill -SIGINT "$FFMPEG_PID" 2>/dev/null || true
                 sleep 10
                 kill -9 "$FFMPEG_PID" 2>/dev/null || true
@@ -135,49 +130,52 @@ jobs:
           
             if wait "$FFMPEG_PID" || EXIT_CODE=$?; then
               STATUS="OK"
-              echo "[$(date +'%H:%M:%S')] Segment $i zakończony poprawnie." | tee -a "$LOG_FILE" >> "$HISTORIA" 2>&1
+              echo "[$(date +'%H:%M:%S')] Segment $i zakończony poprawnie." | tee -a "$LOG_FILE" "$HISTORIA"
             else
               EXIT_CODE=$?
               STATUS="ERROR ($EXIT_CODE)"
-              echo "[$(date +'%H:%M:%S')] ffmpeg zakończył się błędem (kod: $EXIT_CODE)." | tee -a "$LOG_FILE" >> "$HISTORIA" 2>&1
+              echo "[$(date +'%H:%M:%S')] ffmpeg zakończył się błędem (kod: $EXIT_CODE)." | tee -a "$LOG_FILE" "$HISTORIA"
             fi
           
             if [ -f "$FILE" ] && [ ! -s "$FILE" ]; then
-              echo "[$(date +'%H:%M:%S')] Usuwam pusty plik: $FILE" | tee -a "$LOG_FILE" >> "$HISTORIA" 2>&1
+              echo "[$(date +'%H:%M:%S')] Usuwam pusty plik: $FILE" | tee -a "$LOG_FILE" "$HISTORIA"
               rm -f "$FILE"
             fi
           
             SIZE=$(stat -c%s "$FILE" 2>/dev/null || echo 0)
+            ZAKONCZONO=$(date '+%Y-%m-%d %H:%M:%S')
           
-            echo "==================================================" | tee -a "$LOG_FILE" >> "$HISTORIA" 2>&1
-            echo "Segment: $i | Status: $STATUS | Rozmiar: $SIZE B" | tee -a "$LOG_FILE" >> "$HISTORIA" 2>&1
-            echo "==================================================" | tee -a "$LOG_FILE" >> "$HISTORIA" 2>&1
+            # --- NOWY FORMAT LOGOWANIA SEGMENTU ---
+            echo "==================================================" | tee -a "$LOG_FILE" "$HISTORIA"
+            echo "Segment: $i" | tee -a "$LOG_FILE" "$HISTORIA"
+            echo "Status: $STATUS" | tee -a "$LOG_FILE" "$HISTORIA"
+            echo "Plik: $FILE" | tee -a "$LOG_FILE" "$HISTORIA"
+            echo "Rozmiar: $SIZE B" | tee -a "$LOG_FILE" "$HISTORIA"
+            echo "Zakończono: $ZAKONCZONO" | tee -a "$LOG_FILE" "$HISTORIA"
+            echo "==================================================" | tee -a "$LOG_FILE" "$HISTORIA"
 
-            # --- BIEŻĄCA WYSYŁKA NA MEGA + ZAPIS DO HISTORII ---
             ensure_mega_login
           
-          
             if [ -f "$FILE" ] && [ "$SIZE" -gt 50000 ]; then
-              echo "[$(date +'%H:%M:%S')] [MEGA] Wysyłam segment $i..." >> "$HISTORIA" 2>&1
+              echo "[$(date +'%H:%M:%S')] [MEGA] Wysyłam segment $i..." | tee -a "$LOG_FILE" "$HISTORIA"
               if ! mega-put "$FILE" /Radio_Nagrania/ >> "$HISTORIA" 2>&1; then
-                echo "[$(date +'%H:%M:%S')] Błąd wysyłania mp3." >> "$HISTORIA" 2>&1
+                echo "[$(date +'%H:%M:%S')] Błąd wysyłania mp3." | tee -a "$LOG_FILE" "$HISTORIA"
               fi
             fi
           
             if [ -f "$LOG_FILE" ]; then
               if ! mega-put "$LOG_FILE" /Radio_Nagrania/Radio_Logi/ >> "$HISTORIA" 2>&1; then
-                echo "[$(date +'%H:%M:%S')] Błąd wysyłania logow" >> "$HISTORIA"
+                echo "[$(date +'%H:%M:%S')] Błąd wysyłania logow" | tee -a "$LOG_FILE" "$HISTORIA"
               fi
             fi
 
-            # Aktualizacja pliku zbiorczego na MEGA po każdym zakończonym kroku
-            echo "[$(date +'%H:%M:%S')] [MEGA] Aktualizacja zbiorczego pliku historii działania..." >> "$HISTORIA" 2>&1
+            echo "[$(date +'%H:%M:%S')] [MEGA] Aktualizacja zbiorczego pliku historii działania..." | tee -a "$LOG_FILE" "$HISTORIA"
             mega-put -c "$HISTORIA" /Radio_Nagrania/Radio_Logi/ >> /dev/null 2>&1 || mega-put "$HISTORIA" /Radio_Nagrania/Radio_Logi/ >> /dev/null 2>&1
           
             sleep 2
           done
 
-          echo "=== KONIEC PRACY WORKFLOW: $(date '+%Y-%m-%d %H:%M:%S') ===" >> "$HISTORIA" 2>&1
+          echo "=== KONIEC PRACY WORKFLOW: $(date '+%Y-%m-%d %H:%M:%S') ===" | tee -a "$HISTORIA"
           mega-logout >> "$HISTORIA" 2>&1 || true
 
       - name: Upload artifacts
@@ -191,7 +189,6 @@ jobs:
           retention-days: 2
           compression-level: 0
 
-      # Krok Fallback: Bezpiecznik końcowy na wypadek prawidłowego wyjścia z pętli głównej
       - name: Upload to MEGA (Fallback)
         if: always()
         env:
@@ -221,7 +218,6 @@ jobs:
                 mega-put "$file" /Radio_Nagrania/Radio_Logi/ > /dev/null || echo "Błąd wysyłania: $file"
               fi
             done
-            # Ostateczne wysłanie dynamicznego pliku historii przy użyciu dopasowania wzorca (wildcard)
             for h_file in logi/historia_dzialania_*.log; do
               if [ -f "$h_file" ]; then
                 mega-put -c "$h_file" /Radio_Nagrania/Radio_Logi/ > /dev/null 2>&1 || true
@@ -231,9 +227,8 @@ jobs:
           
           mega-logout > /dev/null || true
 
-  # --- AUTOMATYCZNY RESTART W PRZYPADKU AWARII RUNNERA ---
   restart-on-failure:
-    runs-on: ubuntu-22.04  # Zastosowano Sugestię 2
+    runs-on: ubuntu-22.04
     needs: record
     if: failure()
     steps:
@@ -243,7 +238,6 @@ jobs:
           echo "Oczekiwanie 60 sekund przed próbą ponownego uruchomienia..."
           sleep 60
 
-      # [ZMIANA]: Dodano continue-on-error. Jeśli instalacja zawiedzie, przechodzimy dalej.
       - name: Install MEGA CMD for error logging
         continue-on-error: true
         run: |
@@ -266,21 +260,19 @@ jobs:
           CURRENT_RETRY="${{ github.event.inputs.retry_count || '0' }}"
           MAX_RETRIES=3
 
-          # --- GENEROWANIE PLIKU BŁĘDU Z DATĄ I GODZINĄ ---
           mkdir -p logi_awarii
           FAIL_TIMESTAMP=$(date +"%Y-%m-%d_%H-%M-%S")
           FAIL_FILE="logi_awarii/Awaria_Park_${FAIL_TIMESTAMP}.log"
 
-          echo "==================================================" > "$FAIL_FILE"
-          echo "RAPORT O AWARII WORKFLOW: Radio Park FM" >> "$FAIL_FILE"
-          echo "Data i godzina wykrycia: $(date '+%Y-%m-%d %H:%M:%S')" >> "$FAIL_FILE"
-          echo "Status: Główny proces nagrywania (record) zakończył się niepowodzeniem." >> "$FAIL_FILE"
-          echo "ID nieudanego uruchomienia: ${{ github.run_id }}" >> "$FAIL_FILE"
-          echo "Link do logów GitHub: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}" >> "$FAIL_FILE"
-          echo "Numer próby, przy której wystąpił błąd: $CURRENT_RETRY" >> "$FAIL_FILE"
-          echo "==================================================" >> "$FAIL_FILE"
+          echo "==================================================" | tee "$FAIL_FILE"
+          echo "RAPORT O AWARII WORKFLOW: Radio Park FM" | tee -a "$FAIL_FILE"
+          echo "Data i godzina wykrycia: $(date '+%Y-%m-%d %H:%M:%S')" | tee -a "$FAIL_FILE"
+          echo "Status: Główny proces nagrywania (record) zakończył się niepowodzeniem." | tee -a "$FAIL_FILE"
+          echo "ID nieudanego uruchomienia: ${{ github.run_id }}" | tee -a "$FAIL_FILE"
+          echo "Link do logów GitHub: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}" | tee -a "$FAIL_FILE"
+          echo "Numer próby, przy której wystąpił błąd: $CURRENT_RETRY" | tee -a "$FAIL_FILE"
+          echo "==================================================" | tee -a "$FAIL_FILE"
 
-          # Warunkowe sprawdzanie obecności pakietu MEGA w systemie
           if command -v mega-login &> /dev/null; then
             echo "Logowanie do MEGA w celu zapisu raportu awarii..."
             ensure_mega_login || echo "Błąd logowania do MEGA"
@@ -290,7 +282,6 @@ jobs:
           else
             echo "[OSTRZEŻENIE] Instalacja MEGA CMD nie powiodła się. Pomijam chmurę, przechodzę do restartu."
           fi
-          # ------------------------------------------------
 
           echo "Bieżąca liczba wykonanych restartów: $CURRENT_RETRY z maksymalnie $MAX_RETRIES"
 
