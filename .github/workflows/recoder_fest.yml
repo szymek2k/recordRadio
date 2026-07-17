@@ -23,7 +23,7 @@ permissions:
 
 jobs:
   record:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     timeout-minutes: 240
     concurrency:
       group: radio-fest-logger-${{ github.run_id }}
@@ -47,6 +47,7 @@ jobs:
         run: |
           set -euo pipefail
           export TZ="Europe/Warsaw"
+          source scripts/mega_log_in.sh
           
           mkdir -p nagrania
           mkdir -p logi
@@ -55,12 +56,19 @@ jobs:
           LOG_TIMESTAMP=$(date +"%Y-%m-%d_%H-%M-%S")
           HISTORIA="logi/historia_dzialania_${LOG_TIMESTAMP}.log"
           
+          # Inicjalizacja zmiennej (zapobiega błędowi unbound variable przy set -u przed przypisaniem PID)
+          FFMPEG_PID=""
+
+          # --- SYSTEMOWY PAS BEZPIECZEŃSTWA (TRAP) --- [Zastosowano Sugestię 1]
+          # Przechwytuje nagłe anulowanie/ubicie skryptu i kulturalnie zamyka ffmpeg w tym samym jobie
+          trap 'if [ -n "$FFMPEG_PID" ]; then kill -SIGINT "$FFMPEG_PID" 2>/dev/null || true; wait "$FFMPEG_PID" 2>/dev/null || true; fi' EXIT TERM INT
+          
           echo "=== START WORKFLOW: $(date '+%Y-%m-%d %H:%M:%S') ===" > "$HISTORIA"
           echo "Bieżący numer próby (retry_count): ${{ github.event.inputs.retry_count || '0' }}" >> "$HISTORIA" 2>&1
           
           # Logowanie do MEGA z zapisem wyniku do pliku historii
           echo "[$(date +'%H:%M:%S')] Próba logowania do MEGA..." >> "$HISTORIA" 2>&1
-          mega-login "$MEGA_EMAIL" "$MEGA_PASSWORD" >> "$HISTORIA" 2>&1
+          ensure_mega_login
           mega-mkdir /Radio_Fest_Nagrania >> "$HISTORIA" 2>&1 || true
           mega-mkdir /Radio_Fest_Nagrania/Radio_Logi >> "$HISTORIA" 2>&1 || true
           
@@ -125,7 +133,7 @@ jobs:
               sleep 30
             done
           
-            if wait "$FFMPEG_PID"; then
+            if wait "$FFMPEG_PID" || EXIT_CODE=$?; then
               STATUS="OK"
               echo "[$(date +'%H:%M:%S')] Segment $i zakończony poprawnie." | tee -a "$LOG_FILE" >> "$HISTORIA" 2>&1
             else
@@ -146,17 +154,20 @@ jobs:
             echo "==================================================" | tee -a "$LOG_FILE" >> "$HISTORIA" 2>&1
 
             # --- BIEŻĄCA WYSYŁKA NA MEGA + ZAPIS DO HISTORII ---
-            mega-session > /dev/null 2>&1 || mega-login "$MEGA_EMAIL" "$MEGA_PASSWORD" >> "$HISTORIA" 2>&1
-
+            ensure_mega_login
+          
+          
             if [ -f "$FILE" ] && [ "$SIZE" -gt 50000 ]; then
               echo "[$(date +'%H:%M:%S')] [MEGA] Wysyłam segment $i..." >> "$HISTORIA" 2>&1
-              mega-put "$FILE" /Radio_Fest_Nagrania/ >> "$HISTORIA" 2>&1 || echo "Błąd wysyłania mp3" >> "$HISTORIA" 2>&1
-              rm -f "$FILE"
+              if ! mega-put "$FILE" /Radio_Fest_Nagrania/ >> "$HISTORIA" 2>&1; then
+                echo "[$(date +'%H:%M:%S')] Błąd wysyłania mp3." >> "$HISTORIA" 2>&1
+              fi
             fi
-
+          
             if [ -f "$LOG_FILE" ]; then
-              mega-put "$LOG_FILE" /Radio_Fest_Nagrania/Radio_Logi/ >> "$HISTORIA" 2>&1
-              rm -f "$LOG_FILE"
+              if ! mega-put "$LOG_FILE" /Radio_Fest_Nagrania/Radio_Logi/ >> "$HISTORIA" 2>&1; then
+                echo "[$(date +'%H:%M:%S')] Błąd wysyłania logow" >> "$HISTORIA"
+              fi
             fi
           
             # Aktualizacja pliku zbiorczego na MEGA po każdym zakończonym kroku
@@ -178,6 +189,7 @@ jobs:
             nagrania/
             logi/
           retention-days: 2
+          compression-level: 0
 
       # Krok Fallback: Bezpiecznik końcowy na wypadek prawidłowego wyjścia z pętli głównej
       - name: Upload to MEGA (Fallback)
@@ -187,7 +199,8 @@ jobs:
           MEGA_PASSWORD: ${{ secrets.MEGA_PASSWORD }}
         run: |
           set -euo pipefail
-          mega-session > /dev/null 2>&1 || mega-login "$MEGA_EMAIL" "$MEGA_PASSWORD" > /dev/null
+          source scripts/mega_log_in.sh
+          ensure_mega_login
           
           mega-mkdir /Radio_Fest_Nagrania || true
           mega-mkdir /Radio_Fest_Nagrania/Radio_Logi || true
@@ -220,7 +233,7 @@ jobs:
 
   # --- AUTOMATYCZNY RESTART W PRZYPADKU AWARII RUNNERA ---
   restart-on-failure:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04  # Zastosowano Sugestię 2
     needs: record
     if: failure()
     steps:
@@ -230,7 +243,7 @@ jobs:
           echo "Oczekiwanie 60 sekund przed próbą ponownego uruchomienia..."
           sleep 60
 
-      # Instalacja z wymuszonym przejściem dalej w przypadku błędu sieciowego
+      # [ZMIANA]: Dodano continue-on-error. Jeśli instalacja zawiedzie, przechodzimy dalej.
       - name: Install MEGA CMD for error logging
         continue-on-error: true
         run: |
@@ -248,6 +261,7 @@ jobs:
         run: |
           set -euo pipefail
           export TZ="Europe/Warsaw"
+          source scripts/mega_log_in.sh
 
           CURRENT_RETRY="${{ github.event.inputs.retry_count || '0' }}"
           MAX_RETRIES=3
@@ -269,7 +283,7 @@ jobs:
           # Warunkowe sprawdzanie obecności pakietu MEGA w systemie
           if command -v mega-login &> /dev/null; then
             echo "Logowanie do MEGA w celu zapisu raportu awarii..."
-            mega-login "$MEGA_EMAIL" "$MEGA_PASSWORD" > /dev/null || echo "Błąd logowania do MEGA"
+            ensure_mega_login || echo "Błąd logowania do MEGA"
             mega-mkdir /Radio_Fest_Nagrania/Radio_Logi || true
             mega-put "$FAIL_FILE" /Radio_Fest_Nagrania/Radio_Logi/ || echo "Nie udało się wrzucić pliku"
             mega-logout > /dev/null || true
@@ -288,7 +302,7 @@ jobs:
           NEXT_RETRY=$((CURRENT_RETRY + 1))
           echo "Inicjowanie automatycznego restartu (Próba nr $NEXT_RETRY)..."
           
-          gh workflow run recoder_fest.yml \
+          gh workflow run "${{ github.workflow }}" \
             -f duration="${{ github.event.inputs.duration || '10800' }}" \
             -f chunk="${{ github.event.inputs.chunk || '1800' }}" \
             -f retry_count="$NEXT_RETRY"
