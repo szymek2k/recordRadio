@@ -229,8 +229,9 @@ jobs:
           echo "Oczekiwanie 60 sekund przed próbą ponownego uruchomienia..."
           sleep 60
 
-      # Instalujemy MEGA CMD na nowej maszynie, aby móc wysłać raport o awarii bezpośrednio do chmury
+      # [ZMIANA]: Dodano continue-on-error. Jeśli instalacja zawiedzie, przechodzimy dalej.
       - name: Install MEGA CMD for error logging
+        continue-on-error: true
         run: |
           set -euo pipefail
           sudo apt-get update -qq
@@ -264,12 +265,16 @@ jobs:
           echo "Numer próby, przy której wystąpił błąd: $CURRENT_RETRY" >> "$FAIL_FILE"
           echo "==================================================" >> "$FAIL_FILE"
 
-          # Wysyłka pliku raportu na MEGA
-          echo "Logowanie do MEGA w celu zapisu raportu awarii..."
-          mega-login "$MEGA_EMAIL" "$MEGA_PASSWORD" > /dev/null
-          mega-mkdir /Radio_Nagrania/Radio_Logi || true
-          mega-put "$FAIL_FILE" /Radio_Nagrania/Radio_Logi/
-          mega-logout > /dev/null || true
+          # [ZMIANA]: Bezpieczne wysyłanie. Sprawdzamy czy mega-login istnieje w systemie.
+          if command -v mega-login &> /dev/null; then
+            echo "Logowanie do MEGA w celu zapisu raportu awarii..."
+            mega-login "$MEGA_EMAIL" "$MEGA_PASSWORD" > /dev/null || echo "Błąd logowania do MEGA"
+            mega-mkdir /Radio_Nagrania/Radio_Logi || true
+            mega-put "$FAIL_FILE" /Radio_Nagrania/Radio_Logi/ || echo "Nie udało się wrzucić pliku"
+            mega-logout > /dev/null || true
+          else
+            echo "[OSTRZEŻENIE] Instalacja MEGA CMD nie powiodła się. Pomijam chmurę, przechodzę do restartu."
+          fi
           # ------------------------------------------------
 
           echo "Bieżąca liczba wykonanych restartów: $CURRENT_RETRY z maksymalnie $MAX_RETRIES"

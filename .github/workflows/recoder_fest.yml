@@ -1,4 +1,4 @@
-name: Radio Fest FM - ULTIMATE LOGGER (DYNAMIC)
+name: Radio Fest - ULTIMATE LOGGER (DYNAMIC)
 
 on:
   workflow_dispatch:
@@ -26,7 +26,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 240
     concurrency:
-      group: radio-logger-main-${{ github.run_id }}
+      group: radio-fest-logger-${{ github.run_id }}
 
     steps:
       - name: Checkout
@@ -229,8 +229,9 @@ jobs:
           echo "Oczekiwanie 60 sekund przed próbą ponownego uruchomienia..."
           sleep 60
 
-      # Instalujemy MEGA CMD na nowej maszynie, aby móc wysłać raport o awarii bezpośrednio do chmury
+      # Instalacja z wymuszonym przejściem dalej w przypadku błędu sieciowego
       - name: Install MEGA CMD for error logging
+        continue-on-error: true
         run: |
           set -euo pipefail
           sudo apt-get update -qq
@@ -256,7 +257,7 @@ jobs:
           FAIL_FILE="logi_awarii/Awaria_Fest_${FAIL_TIMESTAMP}.log"
 
           echo "==================================================" > "$FAIL_FILE"
-          echo "RAPORT O AWARII WORKFLOW: Radio Fest FM" >> "$FAIL_FILE"
+          echo "RAPORT O AWARII WORKFLOW: Radio Fest" >> "$FAIL_FILE"
           echo "Data i godzina wykrycia: $(date '+%Y-%m-%d %H:%M:%S')" >> "$FAIL_FILE"
           echo "Status: Główny proces nagrywania (record) zakończył się niepowodzeniem." >> "$FAIL_FILE"
           echo "ID nieudanego uruchomienia: ${{ github.run_id }}" >> "$FAIL_FILE"
@@ -264,12 +265,16 @@ jobs:
           echo "Numer próby, przy której wystąpił błąd: $CURRENT_RETRY" >> "$FAIL_FILE"
           echo "==================================================" >> "$FAIL_FILE"
 
-          # Wysyłka pliku raportu na MEGA
-          echo "Logowanie do MEGA w celu zapisu raportu awarii..."
-          mega-login "$MEGA_EMAIL" "$MEGA_PASSWORD" > /dev/null
-          mega-mkdir /Radio_Fest_Nagrania/Radio_Logi || true
-          mega-put "$FAIL_FILE" /Radio_Fest_Nagrania/Radio_Logi/
-          mega-logout > /dev/null || true
+          # Warunkowe sprawdzanie obecności pakietu MEGA w systemie
+          if command -v mega-login &> /dev/null; then
+            echo "Logowanie do MEGA w celu zapisu raportu awarii..."
+            mega-login "$MEGA_EMAIL" "$MEGA_PASSWORD" > /dev/null || echo "Błąd logowania do MEGA"
+            mega-mkdir /Radio_Fest_Nagrania/Radio_Logi || true
+            mega-put "$FAIL_FILE" /Radio_Fest_Nagrania/Radio_Logi/ || echo "Nie udało się wrzucić pliku"
+            mega-logout > /dev/null || true
+          else
+            echo "[OSTRZEŻENIE] Instalacja MEGA CMD nie powiodła się. Pomijam chmurę, przechodzę do restartu."
+          fi
           # ------------------------------------------------
 
           echo "Bieżąca liczba wykonanych restartów: $CURRENT_RETRY z maksymalnie $MAX_RETRIES"
