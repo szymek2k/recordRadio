@@ -156,6 +156,7 @@ jobs:
 
             if [ -f "$LOG_FILE" ]; then
               mega-put "$LOG_FILE" /Radio_Nagrania/Radio_Logi/ >> "$HISTORIA" 2>&1
+              rm -f "$LOG_FILE"
             fi
           
             # Aktualizacja pliku zbiorczego na MEGA po każdym zakończonym kroku
