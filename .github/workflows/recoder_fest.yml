@@ -11,6 +11,15 @@ on:
         description: 'Długość jednego segmentu (w sekundach)'
         required: false
         default: '1800'
+      retry_count:
+        description: 'Aktualny numer próby restartu (wewnętrzne przekazywanie)'
+        required: false
+        default: '0'
+
+# Wymagane uprawnienia dla wbudowanego narzędzia GitHub CLI (gh), aby móc wywołać restart workflow
+permissions:
+  actions: write
+  contents: read
 
 jobs:
   record:
@@ -31,15 +40,20 @@ jobs:
           sudo wget -q -O /var/tmp/megacmd.deb https://mega.nz/linux/repo/xUbuntu_22.04/amd64/megacmd-xUbuntu_22.04_amd64.deb
           sudo apt-get install -y -qq /var/tmp/megacmd.deb
 
-#      - name: Setup tmate session
-#        uses: mxschmitt/action-tmate@v3
-#        with:
-#          detached: true
-
       - name: Smart recorder (MAIN PROCESS)
+        env:
+          MEGA_EMAIL: ${{ secrets.MEGA_EMAIL }}
+          MEGA_PASSWORD: ${{ secrets.MEGA_PASSWORD }}
         run: |
           set -euo pipefail
           export TZ="Europe/Warsaw"
+
+          # --- LOGOWANIE DO MEGA NA STARCIE ---
+          # Logujemy się od razu, aby móc wysyłać pliki natychmiast po nagraniu każdego segmentu.
+          echo "Logowanie do MEGA..."
+          mega-login "$MEGA_EMAIL" "$MEGA_PASSWORD" >/dev/null
+          mega-mkdir /Radio_Fest_Nagrania || true
+          mega-mkdir /Radio_Fest_Nagrania/Radio_Logi || true
 
           DURATION="${{ github.event.inputs.duration || '10800' }}"
           DEFAULT_CHUNK="${{ github.event.inputs.chunk || '1800' }}"
@@ -114,7 +128,7 @@ jobs:
               STATUS="ERROR ($EXIT_CODE)"
               echo "[$(date +'%H:%M:%S')] ffmpeg zakończył się błędem (kod: $EXIT_CODE)." | tee -a "$LOG_FILE"
             fi
-            
+          
             # Usuń pusty plik jeśli powstał
             if [ -f "$FILE" ] && [ ! -s "$FILE" ]; then
               echo "[$(date +'%H:%M:%S')] Usuwam pusty plik: $FILE" | tee -a "$LOG_FILE"
@@ -130,28 +144,47 @@ jobs:
             echo "Rozmiar: $SIZE B" | tee -a "$LOG_FILE"
             echo "Zakończono: $(date '+%Y-%m-%d %H:%M:%S')" | tee -a "$LOG_FILE"
             echo "==================================================" | tee -a "$LOG_FILE"
+
+            # --- OCHRONA PRZED USZKODZENIEM RUNNERA (WYSYŁKA NA BIEŻĄCO) ---
+            # Jeśli segment został pomyślnie nagrany, przerzucamy go na MEGA wewnątrz pętli.
+            # Zapewnia to, że w przypadku nagłej śmierci maszyny, dotychczasowe dane są już w chmurze.
+            if [ -f "$FILE" ] && [ "$SIZE" -gt 50000 ]; then
+              echo "[$(date +'%H:%M:%S')] [MEGA] Wysyłam bezpiecznie gotowy segment $i..."
+              mega-put "$FILE" /Radio_Fest_Nagrania/ || echo "Błąd bezpośredniego wysyłania segmentu"
+              rm -f "$FILE" # Czyszczenie dysku wirtualnego, chroni przed zapełnieniem zasobów
+            fi
+
+            # Wysyłka powiązanego pliku logu
+            if [ -f "$LOG_FILE" ]; then
+              mega-put "$LOG_FILE" /Radio_Fest_Nagrania/Radio_Logi/ || echo "Błąd bezpośredniego wysyłania logu"
+            fi
+            # --------------------------------------------------------------
           
             sleep 2
           done
+
+          mega-logout >/dev/null || true
 
       - name: Upload artifacts
         if: always()
         uses: actions/upload-artifact@v4
         with:
-            name: nagrania-tymczasowe
-            path: |
-              nagrania/
-              logi/
-            retention-days: 2  # Artefakty zostaną usunięte automatycznie po 48 godzinach
+          name: nagrania-tymczasowe
+          path: |
+            nagrania/
+            logi/
+          retention-days: 2
 
-      - name: Upload to MEGA
+      # Krok Fallback: Bezpiecznik. Uruchamia się na samym końcu tylko dla plików,
+      # które mogły pozostać na dysku przy prawidłowym zakończeniu pętli głównej.
+      - name: Upload to MEGA (Fallback)
         if: always()
         env:
           MEGA_EMAIL: ${{ secrets.MEGA_EMAIL }}
           MEGA_PASSWORD: ${{ secrets.MEGA_PASSWORD }}
         run: |
           set -euo pipefail
-          mega-login "$MEGA_EMAIL" "$MEGA_PASSWORD" >/dev/null
+          mega-session >/dev/null 2>&1 || mega-login "$MEGA_EMAIL" "$MEGA_PASSWORD" >/dev/null
           
           mega-mkdir /Radio_Fest_Nagrania || true
           mega-mkdir /Radio_Fest_Nagrania/Radio_Logi || true
@@ -159,7 +192,7 @@ jobs:
           if [ -d "nagrania" ]; then
             for file in nagrania/*.mp3; do
               if [ -f "$file" ] && [ "$(stat -c%s "$file")" -gt 50000 ]; then
-                echo "Wysyłam nagranie: $file..."
+                echo "Wysyłam nagranie (fallback): $file..."
                 mega-put "$file" /Radio_Fest_Nagrania/ || echo "Błąd wysyłania: $file"
               fi
             done
@@ -168,10 +201,54 @@ jobs:
           if [ -d "logi" ]; then
             for file in logi/*.txt; do
               if [ -f "$file" ]; then
-                echo "Wysyłam log: $file..."
+                echo "Wysyłam log (fallback): $file..."
                 mega-put "$file" /Radio_Fest_Nagrania/Radio_Logi/ || echo "Błąd wysyłania: $file"
               fi
             done
           fi
 
           mega-logout >/dev/null || true
+
+  # --- AUTOMATYCZNY RESTART W PRZYPADKU AWARII RUNNERA ---
+  # To zadanie odpali się na ZUPEŁNIE NOWEJ maszynie wirtualnej tylko wtedy,
+  # gdy zadanie 'record' zgłosi status Failure (np. utrata komunikacji).
+  restart-on-failure:
+    runs-on: ubuntu-latest
+    needs: record
+    if: failure()
+    steps:
+      # Krok 1: Odczekanie 1 minuty przed podjęciem działań restartujących
+      - name: Wait for 1 minute before retry
+        run: |
+          echo "Wykryto awarię głównego zadania nagrywającego."
+          echo "Oczekiwanie 60 sekund na ustabilizowanie infrastruktury/strumienia..."
+          sleep 60
+
+      # Krok 2: Ewaluacja licznika pętli i wywołanie nowej sesji workflow przez CLI
+      - name: Check retry limit and trigger new run
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Pobranie aktualnego stanu próby (domyślnie 0 przy ręcznym startowaniu)
+          CURRENT_RETRY="${{ github.event.inputs.retry_count || '0' }}"
+          MAX_RETRIES=3
+
+          echo "Bieżąca liczba automatycznych restartów: $CURRENT_RETRY z maksymalnie $MAX_RETRIES"
+
+          # Sprawdzenie warunku blokady: jeśli to 3 awaria z rzędu, przerywamy automatyzację
+          if [ "$CURRENT_RETRY" -ge "$MAX_RETRIES" ]; then
+            echo "Osiągnięto limit prób ($MAX_RETRIES). Kończę automatyczne wznawianie w celu uniknięcia nieskończonej pętli."
+            exit 0
+          fi
+
+          # Kalkulacja numeru kolejnej próby
+          NEXT_RETRY=$((CURRENT_RETRY + 1))
+          echo "Inicjowanie próby automatycznego restartu nr $NEXT_RETRY..."
+          
+          # Uruchomienie nowej instalacji workflow z zachowaniem parametrów i przekazaniem nowego licznika
+          gh workflow run recoder_fest.yml \
+            -f duration="${{ github.event.inputs.duration || '10800' }}" \
+            -f chunk="${{ github.event.inputs.chunk || '1800' }}" \
+            -f retry_count="$NEXT_RETRY"
+
+          echo "Nowy proces workflow (Próba: $NEXT_RETRY) został pomyślnie zakolejkowany przez GitHub API."
