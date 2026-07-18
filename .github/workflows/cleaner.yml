@@ -1,0 +1,24 @@
+name: Auto Clean Old Workflows
+
+on:
+  schedule:
+    # Odpalaj codziennie o 03:00 w nocy
+    - cron: '0 3 * * *'
+  workflow_dispatch: # Pozwala na ręczne uruchomienie przyciskiem w zakładce Actions
+
+permissions:
+  actions: write # Krytyczne uprawnienie do usuwania logów
+
+jobs:
+  clean-history:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Run cleaner script
+        env:
+          GH_TOKEN: ${{ github.token }} # Przekazanie tokenu autoryzacji do GitHub CLI
+        run: |
+          chmod +x scripts/clean_old_workflows.sh
+          bash scripts/clean_old_workflows.sh
