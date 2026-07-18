@@ -7,6 +7,53 @@ HISTORIA="$2"
 
 export TZ="Europe/Warsaw"
 
+# =================================================================
+# --- INTELIGENTNY LOCK-FILE Z COOLDOWNEM (MAX 1 GODZINA) ---
+# =================================================================
+NOW=$(date +%s)
+# Szukamy jakiegokolwiek istniejącego pliku lock w głównym katalogu MEGA
+EXISTING_LOCK=$(mega-find / | grep -E '^/clean_mega_global_.*\.lock$' | head -n 1 || true)
+
+if [ -n "$EXISTING_LOCK" ]; then
+  LOCK_FILENAME=$(basename "$EXISTING_LOCK")
+  # Wyciągamy timestamp Unix (ostatni ciąg cyfr przed .lock)
+  LOCK_EPOCH=$(echo "$LOCK_FILENAME" | sed -E 's/.*_([0-9]+)\.lock$/\1/')
+
+  # Sprawdzenie czy wyciągnięta wartość jest prawidłową liczbą
+  if [[ "$LOCK_EPOCH" =~ ^[0-9]+$ ]]; then
+    AGE=$((NOW - LOCK_EPOCH))
+
+    # 1200 sekund = 20 minut
+    if [ "$AGE" -gt 1200 ]; then
+      echo "[$(date +'%H:%M:%S')] [RETENCJA] Wykryto przedawnioną blokadę (Wiek: ${AGE}s > 1200). Usuwam martwy lock." | tee -a "$HISTORIA"
+      mega-rm "$EXISTING_LOCK" >> "$HISTORIA" 2>&1 || true
+    else
+      echo "[$(date +'%H:%M:%S')] [RETENCJA] UWAGA: Inny workflow sprząta chmurę. Blokada jest aktywna (Wiek: ${AGE}s). Pomijam krok." | tee -a "$HISTORIA"
+      exit 0
+    fi
+  else
+    # Na wypadek, gdyby ktoś ręcznie stworzył plik o błędnej nazwie
+    echo "[$(date +'%H:%M:%S')] [RETENCJA] Wykryto uszkodzony plik blokady. Usuwam go dla bezpieczeństwa." | tee -a "$HISTORIA"
+    mega-rm "$EXISTING_LOCK" >> "$HISTORIA" 2>&1 || true
+  fi
+fi
+
+# Tworzenie nowego dynamicznego locka (Format: clean_mega_global_RRRR-MM-DD_GG-MM-SS_TIMESTAMP.lock)
+TIMESTAMP=$(date +"%Y-%m-%d_%H-%M-%S")
+LOCK_FILE="/clean_mega_global_${TIMESTAMP}_${NOW}.lock"
+
+echo "[$(date +'%H:%M:%S')] [RETENCJA] Zakładanie nowej globalnej blokady: $LOCK_FILE" | tee -a "$HISTORIA"
+touch "/tmp/$(basename "$LOCK_FILE")"
+if ! mega-put "/tmp/$(basename "$LOCK_FILE")" / >> "$HISTORIA" 2>&1; then
+  echo "[$(date +'%H:%M:%S')] [RETENCJA] Błąd zapisu blokady na MEGA. Dla bezpieczeństwa pomijam czyszczenie." | tee -a "$HISTORIA"
+  exit 0
+fi
+
+# Jeśli skrypt padnie w trakcie pętli, trap usunie ten konkretny, dynamiczny plik
+trap 'mega-rm "$LOCK_FILE" >> "$HISTORIA" 2>&1 || true' EXIT TERM INT
+# =================================================================
+
+
 echo "[$(date +'%H:%M:%S')] [RETENCJA] Uruchamianie czyszczenia i segregacji dla: $TARGET_DIR..." | tee -a "$HISTORIA"
 # --- ZMIANA 1: Próg retencji zmieniony z 14 na 10 dni ---
 TEN_DAYS_AGO=$(date -d "10 days ago 00:00:00" +%s)

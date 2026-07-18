@@ -178,7 +178,7 @@ jobs:
             fi
 
             echo "[$(date +'%H:%M:%S')] [MEGA] Aktualizacja zbiorczego pliku historii działania..." | tee -a "$LOG_FILE" "$HISTORIA"
-            mega-put -c "$HISTORIA" /Radio_Nagrania/Radio_Logi/ >> /dev/null 2>&1 || mega-put "$HISTORIA" /Radio_Nagrania/Radio_Logi/ >> /dev/null 2>&1
+            mega-put "$HISTORIA" /Radio_Nagrania/Radio_Logi/ >> /dev/null 2>&1 || mega-put "$HISTORIA" /Radio_Nagrania/Radio_Logi/ >> /dev/null 2>&1
           
             # Przenoszenie wysłanych plików do podfolderów archiwum
             if [ "$MP3_SUKCES" = true ] && [ -f "$FILE" ]; then
