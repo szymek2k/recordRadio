@@ -78,28 +78,24 @@ mega-find "$TARGET_DIR" | while read -r remote_file; do
 
     if [ "$FILE_SEC" -ne 0 ] && [ "$DAY_OF_WEEK" -ne 0 ]; then
 
-      # Sprawdzamy pliki starsze niż 10 dni
-      if [ "$FILE_SEC" -lt "$TEN_DAYS_AGO" ]; then
+      # Piątek - Niedziela (Dni 5-7) -> PRZENOSZENIE DO PODFOLDERU WEEKEND (Natychmiast, bez względu na wiek)
+      if [ "$DAY_OF_WEEK" -ge 5 ] && [ "$DAY_OF_WEEK" -le 7 ] && [[ ! "$remote_file" == *.txt && ! "$remote_file" == *.log ]]; then
+        echo "[$(date +'%H:%M:%S')] [RETENCJA] Przenoszenie starego pliku weekendowego: $remote_file -> do /weekend/" | tee -a "$HISTORIA"
+        mega-mv "$remote_file" "$TARGET_DIR/weekend/" >> "$HISTORIA" 2>&1 || echo "Błąd przenoszenia pliku na MEGA" >> "$HISTORIA"
+
+      # Sprawdzamy pozostałe pliki (tydzień oraz logi) starsze niż 10 dni
+      elif [ "$FILE_SEC" -lt "$TEN_DAYS_AGO" ]; then
 
         # --- ZMIANA 3: Jeśli to plik tekstowy lub log, usuwamy go bez względu na dzień tygodnia ---
         if [[ "$remote_file" == *.txt || "$remote_file" == *.log ]]; then
           echo "[$(date +'%H:%M:%S')] [RETENCJA] Usuwanie starego pliku logu: $remote_file (Data: $FILE_DATE)" | tee -a "$HISTORIA"
           mega-rm "$remote_file" >> "$HISTORIA" 2>&1 || echo "Błąd usuwania logu z MEGA" >> "$HISTORIA"
 
-        # Dla pozostałych plików (np. .mp3) stosujemy standardowy podział na tydzień/weekend
-        else
-          # Poniedziałek - Czwartek (Dni 1-4) -> USUWANIE
-          if [ "$DAY_OF_WEEK" -ge 1 ] && [ "$DAY_OF_WEEK" -le 4 ]; then
-            echo "[$(date +'%H:%M:%S')] [RETENCJA] Usuwanie starego pliku z tygodnia: $remote_file (Data: $FILE_DATE)" | tee -a "$HISTORIA"
-            mega-rm "$remote_file" >> "$HISTORIA" 2>&1 || echo "Błąd usuwania pliku z MEGA" >> "$HISTORIA"
-
-          # Piątek - Niedziela (Dni 5-7) -> PRZENOSZENIE DO PODFOLDERU WEEKEND
-          elif [ "$DAY_OF_WEEK" -ge 5 ] && [ "$DAY_OF_WEEK" -le 7 ]; then
-            echo "[$(date +'%H:%M:%S')] [RETENCJA] Przenoszenie starego pliku weekendowego: $remote_file -> do /weekend/" | tee -a "$HISTORIA"
-            mega-mv "$remote_file" "$TARGET_DIR/weekend/" >> "$HISTORIA" 2>&1 || echo "Błąd przenoszenia pliku na MEGA" >> "$HISTORIA"
-          fi
+        # Poniedziałek - Czwartek (Dni 1-4) -> USUWANIE
+        elif [ "$DAY_OF_WEEK" -ge 1 ] && [ "$DAY_OF_WEEK" -le 4 ]; then
+          echo "[$(date +'%H:%M:%S')] [RETENCJA] Usuwanie starego pliku z tygodnia: $remote_file (Data: $FILE_DATE)" | tee -a "$HISTORIA"
+          mega-rm "$remote_file" >> "$HISTORIA" 2>&1 || echo "Błąd usuwania pliku z MEGA" >> "$HISTORIA"
         fi
-
       fi
     fi
   fi
