@@ -68,6 +68,8 @@ jobs:
           mega-mkdir /Radio_Fest_Nagrania 2>&1 | tee -a "$HISTORIA" || true
           mega-mkdir /Radio_Fest_Nagrania/Radio_Logi 2>&1 | tee -a "$HISTORIA" || true
           
+          bash scripts/clean_mega.sh "/Radio_Fest_Nagrania" "$HISTORIA" || true
+          
           DURATION="${{ github.event.inputs.duration || '10800' }}"
           DEFAULT_CHUNK="${{ github.event.inputs.chunk || '1800' }}"
           
@@ -145,7 +147,6 @@ jobs:
             SIZE=$(stat -c%s "$FILE" 2>/dev/null || echo 0)
             ZAKONCZONO=$(date '+%Y-%m-%d %H:%M:%S')
           
-            # --- NOWY FORMAT LOGOWANIA SEGMENTU ---
             echo "==================================================" | tee -a "$LOG_FILE" "$HISTORIA"
             echo "Segment: $i" | tee -a "$LOG_FILE" "$HISTORIA"
             echo "Status: $STATUS" | tee -a "$LOG_FILE" "$HISTORIA"
@@ -156,15 +157,22 @@ jobs:
 
             ensure_mega_login
           
+            MP3_SUKCES=false
+            LOG_SUKCES=false
+
             if [ -f "$FILE" ] && [ "$SIZE" -gt 50000 ]; then
               echo "[$(date +'%H:%M:%S')] [MEGA] Wysyłam segment $i..." | tee -a "$LOG_FILE" "$HISTORIA"
-              if ! mega-put "$FILE" /Radio_Fest_Nagrania/ >> "$HISTORIA" 2>&1; then
+              if mega-put "$FILE" /Radio_Fest_Nagrania/ >> "$HISTORIA" 2>&1; then
+                MP3_SUKCES=true
+              else
                 echo "[$(date +'%H:%M:%S')] Błąd wysyłania mp3." | tee -a "$LOG_FILE" "$HISTORIA"
               fi
             fi
           
             if [ -f "$LOG_FILE" ]; then
-              if ! mega-put "$LOG_FILE" /Radio_Fest_Nagrania/Radio_Logi/ >> "$HISTORIA" 2>&1; then
+              if mega-put "$LOG_FILE" /Radio_Fest_Nagrania/Radio_Logi/ >> "$HISTORIA" 2>&1; then
+                LOG_SUKCES=true
+              else
                 echo "[$(date +'%H:%M:%S')] Błąd wysyłania logow" | tee -a "$LOG_FILE" "$HISTORIA"
               fi
             fi
@@ -172,6 +180,17 @@ jobs:
             echo "[$(date +'%H:%M:%S')] [MEGA] Aktualizacja zbiorczego pliku historii działania..." | tee -a "$LOG_FILE" "$HISTORIA"
             mega-put -c "$HISTORIA" /Radio_Fest_Nagrania/Radio_Logi/ >> /dev/null 2>&1 || mega-put "$HISTORIA" /Radio_Fest_Nagrania/Radio_Logi/ >> /dev/null 2>&1
           
+            # Przenoszenie wysłanych plików do podfolderów archiwum
+            if [ "$MP3_SUKCES" = true ] && [ -f "$FILE" ]; then
+              mkdir -p nagrania/wyslane
+              mv "$FILE" nagrania/wyslane/
+            fi
+
+            if [ "$LOG_SUKCES" = true ] && [ -f "$LOG_FILE" ]; then
+              mkdir -p logi/wyslane
+              mv "$LOG_FILE" logi/wyslane/
+            fi
+
             sleep 2
           done
 
@@ -189,7 +208,6 @@ jobs:
           retention-days: 2
           compression-level: 0
 
-      # Krok Fallback: Bezpiecznik końcowy na wypadek prawidłowego wyjścia z pętli głównej
       - name: Upload to MEGA (Fallback)
         if: always()
         env:
