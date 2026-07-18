@@ -68,7 +68,7 @@ jobs:
           mega-mkdir /Radio_Nagrania 2>&1 | tee -a "$HISTORIA" || true
           mega-mkdir /Radio_Nagrania/Radio_Logi 2>&1 | tee -a "$HISTORIA" || true
           
-          bash scripts/clean_mega.sh "/Radio_Nagrania" "$HISTORIA" || true
+#          bash scripts/clean_mega.sh "/Radio_Nagrania" "$HISTORIA" || true
           
           DURATION="${{ github.event.inputs.duration || '10800' }}"
           DEFAULT_CHUNK="${{ github.event.inputs.chunk || '1800' }}"

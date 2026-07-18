@@ -16,9 +16,52 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Run cleaner script
+      # --- KROK 1: Dotychczasowe czyszczenie logów GitHub Actions ---
+      - name: Run cleaner script (GitHub Logs)
         env:
           GH_TOKEN: ${{ github.token }} # Przekazanie tokenu autoryzacji do GitHub CLI
         run: |
           chmod +x scripts/clean_old_workflows.sh
           bash scripts/clean_old_workflows.sh
+
+      # --- KROK 2: Instalacja MEGA CMD (Zabezpieczona przed błędami) ---
+      - name: Install MEGA CMD
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq wget
+          sudo wget -q -O /var/tmp/megacmd.deb https://mega.nz/linux/repo/xUbuntu_22.04/amd64/megacmd-xUbuntu_22.04_amd64.deb
+          sudo apt-get install -y -qq /var/tmp/megacmd.deb
+
+      # --- KROK 3: Wywołanie skryptu clean_mega.sh (Zabezpieczona przed błędami) ---
+      - name: Clean MEGA Storage
+        continue-on-error: true
+        env:
+          MEGA_EMAIL: ${{ secrets.MEGA_EMAIL }}
+          MEGA_PASSWORD: ${{ secrets.MEGA_PASSWORD }}
+        run: |
+          set -euo pipefail
+          export TZ="Europe/Warsaw"
+          source scripts/mega_log_in.sh
+          
+          # Inicjalizacja pliku logu
+          mkdir -p logi
+          LOG_TIMESTAMP=$(date +"%Y-%m-%d_%H-%M-%S")
+          HISTORIA="logi/historia_czyszczenia_mega_${LOG_TIMESTAMP}.log"
+          
+          echo "=== START AUTOMATYCZNEGO SPRZĄTANIA MEGA: $(date '+%Y-%m-%d %H:%M:%S') ===" | tee "$HISTORIA"
+          
+          echo "[$(date +'%H:%M:%S')] Logowanie do usługi MEGA..." | tee -a "$HISTORIA"
+          ensure_mega_login 2>&1 | tee -a "$HISTORIA"
+          
+          # Uruchomienie skryptu czyszczącego
+          bash scripts/clean_mega.sh "/Radio_Nagrania" "$HISTORIA" || true
+          
+          # Próba wysłania raportu na MEGA
+          echo "[$(date +'%H:%M:%S')] Wysyłanie raportu z czyszczenia na MEGA..." | tee -a "$HISTORIA"
+          mega-mkdir /Radio_Nagrania/Radio_Logi 2>&1 || true
+          mega-put "$HISTORIA" /Radio_Nagrania/Radio_Logi/ || true
+          
+          echo "=== KONIEC PRACY WORKFLOW SPRZĄTAJĄCEGO ===" | tee -a "$HISTORIA"
+          mega-logout > /dev/null 2>&1 || true
