@@ -16,7 +16,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # --- KROK 1: Dotychczasowe czyszczenie logów GitHub Actions ---
+      # --- KROK 1: Czyszczenie logów historii GitHub Actions ---
       - name: Run cleaner script (GitHub Logs)
         env:
           GH_TOKEN: ${{ github.token }} # Przekazanie tokenu autoryzacji do GitHub CLI
@@ -34,8 +34,8 @@ jobs:
           sudo wget -q -O /var/tmp/megacmd.deb https://mega.nz/linux/repo/xUbuntu_22.04/amd64/megacmd-xUbuntu_22.04_amd64.deb
           sudo apt-get install -y -qq /var/tmp/megacmd.deb
 
-      # --- KROK 3: Wywołanie skryptu clean_mega.sh (Zabezpieczona przed błędami) ---
-      - name: Clean MEGA Storage
+      # --- KROK 3: Wywołanie skryptu czyszczącego (Audio + Logi) dla obu lokalizacji ---
+      - name: Clean MEGA Storage (Audio & Logs)
         continue-on-error: true
         env:
           MEGA_EMAIL: ${{ secrets.MEGA_EMAIL }}
@@ -45,7 +45,7 @@ jobs:
           export TZ="Europe/Warsaw"
           source scripts/mega_log_in.sh
           
-          # Inicjalizacja pliku logu
+          # Inicjalizacja pliku logu z bieżącego uruchomienia
           mkdir -p logi
           LOG_TIMESTAMP=$(date +"%Y-%m-%d_%H-%M-%S")
           HISTORIA="logi/historia_czyszczenia_mega_${LOG_TIMESTAMP}.log"
@@ -55,13 +55,18 @@ jobs:
           echo "[$(date +'%H:%M:%S')] Logowanie do usługi MEGA..." | tee -a "$HISTORIA"
           ensure_mega_login 2>&1 | tee -a "$HISTORIA"
           
-          # Uruchomienie skryptu czyszczącego
-          bash scripts/clean_mega.sh "/Radio_Nagrania" "$HISTORIA" || true
+          # Pętla czyszcząca oba foldery jeden po drugim
+          for FOLDER in "/Radio_Nagrania" "/Radio_Fest_Nagrania"; do
+            echo "[$(date +'%H:%M:%S')] Rozpoczynam głębokie czyszczenie folderu (nagrania + logi): $FOLDER" | tee -a "$HISTORIA"
+            bash scripts/clean_mega.sh "$FOLDER" "$HISTORIA" || true
+          done
           
-          # Próba wysłania raportu na MEGA
+          # Dynamiczne wrzucenie zbiorczego logu do odpowiednich podfolderów obu stacji
           echo "[$(date +'%H:%M:%S')] Wysyłanie raportu z czyszczenia na MEGA..." | tee -a "$HISTORIA"
-          mega-mkdir /Radio_Nagrania/Radio_Logi 2>&1 || true
-          mega-put "$HISTORIA" /Radio_Nagrania/Radio_Logi/ || true
+          for FOLDER in "/Radio_Nagrania" "/Radio_Fest_Nagrania"; do
+            mega-mkdir "$FOLDER/Radio_Logi" 2>&1 || true
+            mega-put "$HISTORIA" "$FOLDER/Radio_Logi/" || true
+          done
           
           echo "=== KONIEC PRACY WORKFLOW SPRZĄTAJĄCEGO ===" | tee -a "$HISTORIA"
           mega-logout > /dev/null 2>&1 || true
