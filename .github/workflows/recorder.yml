@@ -68,7 +68,8 @@ jobs:
           mega-mkdir /Radio_Nagrania 2>&1 | tee -a "$HISTORIA" || true
           mega-mkdir /Radio_Nagrania/Radio_Logi 2>&1 | tee -a "$HISTORIA" || true
           
-#          bash scripts/clean_mega.sh "/Radio_Nagrania" "$HISTORIA" || true
+          # --- [IMPORT] AUTOMATYCZNE CZYSZCZENIE MEGA ---
+          # bash scripts/clean_mega.sh "/Radio_Nagrania" "$HISTORIA"
           
           DURATION="${{ github.event.inputs.duration || '10800' }}"
           DEFAULT_CHUNK="${{ github.event.inputs.chunk || '1800' }}"
@@ -178,9 +179,8 @@ jobs:
             fi
 
             echo "[$(date +'%H:%M:%S')] [MEGA] Aktualizacja zbiorczego pliku historii działania..." | tee -a "$LOG_FILE" "$HISTORIA"
-            mega-put "$HISTORIA" /Radio_Nagrania/Radio_Logi/ >> /dev/null 2>&1 || mega-put "$HISTORIA" /Radio_Nagrania/Radio_Logi/ >> /dev/null 2>&1
+            mega-put -c "$HISTORIA" /Radio_Nagrania/Radio_Logi/ >> /dev/null 2>&1 || mega-put "$HISTORIA" /Radio_Nagrania/Radio_Logi/ >> /dev/null 2>&1
           
-            # Przenoszenie wysłanych plików do podfolderów archiwum
             if [ "$MP3_SUKCES" = true ] && [ -f "$FILE" ]; then
               mkdir -p nagrania/wyslane
               mv "$FILE" nagrania/wyslane/
@@ -305,7 +305,7 @@ jobs:
           echo "Bieżąca liczba wykonanych restartów: $CURRENT_RETRY z maksymalnie $MAX_RETRIES"
 
           if [ "$CURRENT_RETRY" -ge "$MAX_RETRIES" ]; then
-            echo "Osiągnięto limit prób ($MAX_RETRIES). Przerywam automatyczne wznawianie."
+            echo "Osiągneto limit prób ($MAX_RETRIES). Przerywam automatyczne wznawianie."
             exit 0
           fi
 
